@@ -257,7 +257,15 @@ const PlanPage: React.FC = () => {
                                     onClick={() => confirmReplacement(alt)}
                                     className="p-3 border border-gray-200 rounded-xl hover:border-orange-500 hover:bg-orange-50 cursor-pointer flex items-center gap-3 transition"
                                 >
-                                    <img src={`https://picsum.photos/seed/${alt.id}/100/100`} alt="" className="w-12 h-12 rounded-lg bg-gray-200 object-cover" />
+                                    <img 
+                                      src={`/images/recipes/${alt.id}.jpg`} 
+                                      alt={alt.name} 
+                                      className="w-12 h-12 rounded-lg bg-gray-200 object-cover"
+                                      onError={(e) => {
+                                        // 이미지 로드 실패 시 플레이스홀더로 대체
+                                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${alt.id}/100/100`;
+                                      }}
+                                    />
                                     <div className="flex-1">
                                         <h4 className="font-bold text-gray-800">{alt.name}</h4>
                                         <p className="text-xs text-gray-400">{alt.ingredients.slice(0, 3).join(', ')}...</p>
@@ -298,7 +306,15 @@ const MealCard: React.FC<{ type: string, recipe: Recipe | null, onClick: () => v
 
     return (
         <div onClick={onClick} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-98 transition-transform cursor-pointer relative z-10">
-            <img src={`https://picsum.photos/seed/${recipe.id}/100/100`} alt="" className="w-12 h-12 rounded-lg object-cover bg-gray-200" />
+            <img 
+              src={`/images/recipes/${recipe.id}.jpg`} 
+              alt={recipe.name} 
+              className="w-12 h-12 rounded-lg object-cover bg-gray-200"
+              onError={(e) => {
+                // 이미지 로드 실패 시 플레이스홀더로 대체
+                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${recipe.id}/100/100`;
+              }}
+            />
             <div>
                 <span className="text-xs text-gray-400 font-medium block">{type}</span>
                 <span className="font-bold text-gray-800">{recipe.name}</span>

@@ -172,9 +172,13 @@ const HomePage: React.FC = () => {
                       </div>
                       <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
                         <img 
-                          src={`https://picsum.photos/seed/${todaysMeals.lunch.id}/100/100`} 
+                          src={`/images/recipes/${todaysMeals.lunch.id}.jpg`} 
                           alt={todaysMeals.lunch.name} 
                           className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // 이미지 로드 실패 시 플레이스홀더로 대체
+                            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.lunch.id}/100/100`;
+                          }}
                         />
                       </div>
                     </div>
@@ -232,9 +236,13 @@ const HomePage: React.FC = () => {
                       </div>
                       <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
                         <img 
-                          src={`https://picsum.photos/seed/${todaysMeals.dinner.id}/100/100`} 
+                          src={`/images/recipes/${todaysMeals.dinner.id}.jpg`} 
                           alt={todaysMeals.dinner.name} 
                           className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // 이미지 로드 실패 시 플레이스홀더로 대체
+                            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.dinner.id}/100/100`;
+                          }}
                         />
                       </div>
                     </div>

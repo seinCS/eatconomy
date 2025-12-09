@@ -31,9 +31,13 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe }) => {
     >
       <div className="h-2/3 bg-gray-200 relative">
         <img 
-          src={`https://picsum.photos/seed/${recipe.id}/400/500`} 
+          src={`/images/recipes/${recipe.id}.jpg`} 
           alt={recipe.name} 
           className="w-full h-full object-cover"
+          onError={(e) => {
+            // 이미지 로드 실패 시 플레이스홀더로 대체
+            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${recipe.id}/400/500`;
+          }}
         />
         <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/60 to-transparent p-6 pt-12">
           <h2 className="text-3xl font-bold text-white mb-2">{recipe.name}</h2>
