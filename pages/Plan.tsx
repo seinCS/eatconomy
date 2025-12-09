@@ -2,8 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../App';
 import { DAYS } from '../constants';
 import { getSharedIngredients, getAlternativeRecipes, getAllRecipes } from '../services/recipeService';
-import { generateRecipeTip } from '../services/geminiService';
-import { Sparkles, Link as LinkIcon, Info, Repeat, CheckCircle, TrendingUp, Flame, Leaf } from 'lucide-react';
+import { Clock, Link as LinkIcon, Info, Repeat, CheckCircle, TrendingUp, Flame, Leaf, Check, X, ShoppingCart } from 'lucide-react';
 import { Recipe } from '../types';
 import { useNavigate } from 'react-router-dom';
 
@@ -13,10 +12,9 @@ interface SlotData {
 }
 
 const PlanPage: React.FC = () => {
-  const { plannedRecipes, updatePlan, dislikedRecipes } = useApp();
+  const { plannedRecipes, updatePlan, dislikedRecipes, fridge } = useApp();
   const navigate = useNavigate();
   const [selectedSlot, setSelectedSlot] = useState<SlotData | null>(null);
-  const [aiTip, setAiTip] = useState<string>("");
   
   // Re-roll state
   const [isReplacing, setIsReplacing] = useState(false);
@@ -53,12 +51,28 @@ const PlanPage: React.FC = () => {
     return { savings, avgCalories, chainCount };
   }, [plannedRecipes]);
 
-  const handleRecipeClick = async (recipe: Recipe, index: number) => {
+  const handleRecipeClick = (recipe: Recipe, index: number) => {
     setSelectedSlot({ recipe, index });
     setIsReplacing(false); // Reset replace view
-    setAiTip("AI가 팁을 생각 중입니다...");
-    const tip = await generateRecipeTip(recipe);
-    setAiTip(tip);
+  };
+
+  // Helper: Check recipe ingredient readiness
+  const getRecipeReadiness = (recipe: Recipe) => {
+    const available = recipe.ingredients.filter(ing => fridge.includes(ing));
+    const missing = recipe.ingredients.filter(ing => !fridge.includes(ing));
+    const readiness = Math.round((available.length / recipe.ingredients.length) * 100);
+    return { available, missing, readiness, ready: missing.length <= 1 };
+  };
+
+  // Helper: Get chain cooking info
+  const getChainInfo = (index: number) => {
+    const prevRecipe = index > 0 ? plannedRecipes[index - 1] : null;
+    const nextRecipe = index < plannedRecipes.length - 1 ? plannedRecipes[index + 1] : null;
+    
+    const prevChain = prevRecipe ? getSharedIngredients(prevRecipe, selectedSlot!.recipe) : [];
+    const nextChain = nextRecipe ? getSharedIngredients(selectedSlot!.recipe, nextRecipe) : [];
+    
+    return { prevChain, nextChain };
   };
 
   const handleStartReplace = () => {
@@ -205,23 +219,131 @@ const PlanPage: React.FC = () => {
                     // --- View 1: Detail ---
                     <>
                         <div className="flex justify-between items-start mb-4">
-                            <div>
-                                <h2 className="text-xl font-bold">{selectedSlot.recipe.name}</h2>
-                                <p className="text-sm text-gray-500">{selectedSlot.recipe.ingredients.join(', ')}</p>
+                            <div className="flex-1">
+                                <h2 className="text-xl font-bold mb-1">{selectedSlot.recipe.name}</h2>
+                                <div className="flex items-center gap-3 text-xs text-gray-500">
+                                    <div className="flex items-center gap-1">
+                                        <Clock size={12} />
+                                        <span>{selectedSlot.recipe.time}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        <Flame size={12} />
+                                        <span>{selectedSlot.recipe.calories} kcal</span>
+                                    </div>
+                                </div>
                             </div>
-                            <button onClick={() => setSelectedSlot(null)} className="p-1 bg-gray-100 rounded-full">
-                                <Info size={20} />
+                            <button onClick={() => setSelectedSlot(null)} className="p-1 bg-gray-100 rounded-full hover:bg-gray-200">
+                                <X size={18} />
                             </button>
                         </div>
-                        
-                        <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 mb-4">
-                            <h4 className="font-bold text-orange-700 text-sm mb-2 flex items-center">
-                                <Sparkles size={14} className="mr-1"/> AI 꿀팁
-                            </h4>
-                            <p className="text-sm text-gray-700 leading-relaxed min-h-[60px]">
-                                {aiTip}
-                            </p>
-                        </div>
+
+                        {/* 재료 준비 상태 */}
+                        {(() => {
+                            const readiness = getRecipeReadiness(selectedSlot.recipe);
+                            return (
+                                <div className={`p-4 rounded-xl border mb-4 ${
+                                    readiness.ready 
+                                        ? 'bg-green-50 border-green-200' 
+                                        : readiness.readiness >= 50 
+                                        ? 'bg-yellow-50 border-yellow-200' 
+                                        : 'bg-red-50 border-red-200'
+                                }`}>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h4 className="font-bold text-sm flex items-center">
+                                            <ShoppingCart size={14} className="mr-1.5"/>
+                                            재료 준비 상태
+                                        </h4>
+                                        <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                            readiness.ready 
+                                                ? 'bg-green-200 text-green-700' 
+                                                : readiness.readiness >= 50 
+                                                ? 'bg-yellow-200 text-yellow-700' 
+                                                : 'bg-red-200 text-red-700'
+                                        }`}>
+                                            {readiness.readiness}%
+                                        </span>
+                                    </div>
+                                    
+                                    {readiness.available.length > 0 && (
+                                        <div className="mb-2">
+                                            <p className="text-xs text-gray-600 mb-1.5 font-medium">✓ 보유한 재료 ({readiness.available.length}개)</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {readiness.available.map(ing => (
+                                                    <span key={ing} className="text-xs bg-white px-2 py-1 rounded-md text-green-700 font-medium">
+                                                        {ing}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {readiness.missing.length > 0 && (
+                                        <div>
+                                            <p className="text-xs text-gray-600 mb-1.5 font-medium">✗ 부족한 재료 ({readiness.missing.length}개)</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {readiness.missing.map(ing => (
+                                                    <span key={ing} className="text-xs bg-white px-2 py-1 rounded-md text-red-700 font-medium">
+                                                        {ing}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
+                        {/* 연계 요리 정보 */}
+                        {(() => {
+                            const chainInfo = getChainInfo(selectedSlot.index);
+                            if (chainInfo.prevChain.length === 0 && chainInfo.nextChain.length === 0) return null;
+                            
+                            return (
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-4">
+                                    <h4 className="font-bold text-blue-700 text-sm mb-2 flex items-center">
+                                        <LinkIcon size={14} className="mr-1.5"/>
+                                        재료 연계 정보
+                                    </h4>
+                                    {chainInfo.prevChain.length > 0 && (
+                                        <div className="mb-2">
+                                            <p className="text-xs text-gray-600 mb-1">이전 식사와 공유 재료</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {chainInfo.prevChain.map(ing => (
+                                                    <span key={ing} className="text-xs bg-white px-2 py-1 rounded-md text-blue-700 font-medium">
+                                                        {ing}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {chainInfo.nextChain.length > 0 && (
+                                        <div>
+                                            <p className="text-xs text-gray-600 mb-1">다음 식사와 공유 재료</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {chainInfo.nextChain.map(ing => (
+                                                    <span key={ing} className="text-xs bg-white px-2 py-1 rounded-md text-blue-700 font-medium">
+                                                        {ing}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
+                        {/* 태그 */}
+                        {selectedSlot.recipe.tags.length > 0 && (
+                            <div className="mb-4">
+                                <div className="flex flex-wrap gap-1.5">
+                                    {selectedSlot.recipe.tags.map(tag => (
+                                        <span key={tag} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex gap-3">
                             <button 
@@ -232,10 +354,11 @@ const PlanPage: React.FC = () => {
                                 메뉴 교체
                             </button>
                             <button 
-                                onClick={() => setSelectedSlot(null)}
-                                className="flex-1 py-3 bg-gray-900 text-white rounded-xl font-bold"
+                                onClick={() => navigate('/list')}
+                                className="flex-1 py-3 bg-orange-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 active:bg-orange-600"
                             >
-                                닫기
+                                <ShoppingCart size={16} />
+                                장보기 목록
                             </button>
                         </div>
                     </>
