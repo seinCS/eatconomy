@@ -20,9 +20,23 @@ async function bootstrap() {
     }
     
     // CORS 설정
+    // FRONTEND_URL에서 끝 슬래시 제거하여 정규화
+    const frontendUrl = process.env.FRONTEND_URL 
+      ? process.env.FRONTEND_URL.replace(/\/$/, '') // 끝 슬래시 제거
+      : 'http://localhost:3000';
+    
     app.enableCors({
-      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+      origin: (origin, callback) => {
+        // origin이 없거나 (같은 origin 요청) 또는 허용된 origin인지 확인
+        if (!origin || origin === frontendUrl || origin.startsWith(frontendUrl + '/')) {
+          callback(null, true);
+        } else {
+          callback(null, frontendUrl); // 정규화된 URL 반환
+        }
+      },
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
     });
 
     // 전역 예외 필터 설정 (순서 중요)
