@@ -7,15 +7,13 @@ import SwipeCard from '../components/SwipeCard';
 import { X, Heart, Check, ChevronLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
+import { SWIPE_CARD_COUNT } from '../constants';
 
 const SwipePage: React.FC = () => {
   const { addLikedRecipe, addDislikedRecipe, generatePlan, preferences } = useApp();
   const navigate = useNavigate();
   const [cards, setCards] = useState<Recipe[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-
-  // Set number of cards to swipe
-  const TOTAL_CARDS = 10; 
+  const [currentIndex, setCurrentIndex] = useState(0); 
 
   useEffect(() => {
     // Load recipes and shuffle
@@ -32,7 +30,7 @@ const SwipePage: React.FC = () => {
         return !hasAllergen;
     });
 
-    const shuffled = [...safeRecipes].sort(() => 0.5 - Math.random()).slice(0, TOTAL_CARDS);
+    const shuffled = [...safeRecipes].sort(() => 0.5 - Math.random()).slice(0, SWIPE_CARD_COUNT);
     setCards(shuffled);
   }, [preferences]);
 

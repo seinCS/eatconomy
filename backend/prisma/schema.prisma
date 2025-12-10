@@ -1,0 +1,142 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 사용자
+model User {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  nickname   String
+  avatarUrl  String?
+  provider   String // 'kakao' | 'google'
+  providerId String // 카카오/구글에서 제공하는 고유 ID
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  preferences     UserPreferences?
+  fridgeItems     FridgeItem[]
+  plans           Plan[]
+  likedRecipes    LikedRecipe[]
+  dislikedRecipes DislikedRecipe[]
+  shoppingChecks  ShoppingCheck[]
+  mealFinished    MealFinished[]
+
+  @@index([provider, providerId])
+  @@map("users")
+}
+
+// 사용자 선호도
+model UserPreferences {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  allergies      String[] // 알러지 재료 목록
+  dislikedFoods  String[] // 싫어하는 재료 목록
+  spicinessLevel Int // 1: 순한맛, 2: 보통, 3: 매운맛
+  cookingSkill   String // 'Beginner' | 'Intermediate' | 'Advanced'
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// 냉장고 재료
+model FridgeItem {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String // 재료 이름
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("fridge_items")
+}
+
+// 주간 식단표 (14개 슬롯: 7일 × 2끼)
+model Plan {
+  id        String   @id @default(uuid())
+  userId    String
+  slotIndex Int // 0-13 (0=월요일 점심, 1=월요일 저녁, ...)
+  recipeId  Int? // 레시피 ID (101-150)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, slotIndex])
+  @@index([userId])
+  @@map("plans")
+}
+
+// 좋아요한 레시피
+model LikedRecipe {
+  id        String   @id @default(uuid())
+  userId    String
+  recipeId  Int // 레시피 ID (101-150)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recipeId])
+  @@index([userId])
+  @@map("liked_recipes")
+}
+
+// 싫어하는 레시피
+model DislikedRecipe {
+  id        String   @id @default(uuid())
+  userId    String
+  recipeId  Int // 레시피 ID (101-150)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recipeId])
+  @@index([userId])
+  @@map("disliked_recipes")
+}
+
+// 장보기 체크리스트
+model ShoppingCheck {
+  id        String   @id @default(uuid())
+  userId    String
+  itemName  String // 재료 이름
+  checked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemName])
+  @@index([userId])
+  @@map("shopping_checks")
+}
+
+// 식사 완료 상태
+model MealFinished {
+  id        String   @id @default(uuid())
+  userId    String
+  dateKey   String // "2024-12-08"
+  mealType  String // 'lunch' | 'dinner'
+  finished  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dateKey, mealType])
+  @@index([userId])
+  @@map("meal_finished")
+}

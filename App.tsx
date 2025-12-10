@@ -10,14 +10,19 @@ import ListPage from './pages/List';
 import FridgePage from './pages/Fridge';
 import LoginPage from './pages/Login';
 import ProfilePage from './pages/Profile';
-import { Recipe, UserPreferences } from './types';
+import AuthCallbackPage from './pages/AuthCallback';
+import ErrorBoundary from './components/ErrorBoundary';
+import { Recipe, UserPreferences, User } from './types';
 import { getAllRecipes, generateScoredWeeklyPlan } from './services/recipeService';
 import { authService } from './services/authService';
-import { dbService, User } from './services/dbService';
+import { apiService } from './services/apiService';
+import { WEEKLY_PLAN_SLOTS, SWIPE_CARD_COUNT } from './constants';
+import { getTodayDateKey, getTodayMealIndices } from './utils/date';
 
 // --- Context Setup ---
 interface AppContextType {
   user: User | null;
+  isCheckingAuth: boolean; // 인증 확인 중인지 여부
   login: (provider: 'kakao' | 'google') => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -56,11 +61,24 @@ export const useApp = () => {
 
 // --- Protected Route Component ---
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user } = useApp();
-  const location = useLocation();
+  const { user, isCheckingAuth } = useApp();
+  const routeLocation = useLocation();
 
+  // 인증 확인 중이면 로딩 표시
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-500">인증 확인 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 인증 확인이 완료되었지만 사용자가 없으면 로그인 페이지로
   if (!user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to="/login" state={{ from: routeLocation }} replace />;
   }
 
   return <>{children}</>;
@@ -69,24 +87,42 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 // --- Main App Component ---
 const App: React.FC = () => {
   // --- Auth State ---
-  const [user, setUser] = useState<User | null>(authService.getCurrentUser());
+  const [user, setUser] = useState<User | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   // --- App Data State (Synced from DB) ---
   const [fridge, setFridge] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences | undefined>(undefined);
   const [likedRecipes, setLikedRecipes] = useState<Recipe[]>([]);
   const [dislikedRecipes, setDislikedRecipes] = useState<Recipe[]>([]);
-  const [plannedRecipes, setPlannedRecipes] = useState<(Recipe | null)[]>(Array(14).fill(null));
+  const [plannedRecipes, setPlannedRecipes] = useState<(Recipe | null)[]>(Array(WEEKLY_PLAN_SLOTS).fill(null));
   const [shoppingListChecks, setShoppingListChecks] = useState<Record<string, boolean>>({});
   const [todayMealFinished, setTodayMealFinished] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
 
-  // force redirect on mount
+  // --- Check Authentication on Mount ---
   useEffect(() => {
-    if (window.location.hash !== '#/') {
-      window.location.hash = '#/';
-    }
+    const checkAuth = async () => {
+      try {
+        const currentUser = await authService.getCurrentUser();
+        setUser(currentUser);
+        
+        // 에러 추적 서비스에 사용자 정보 설정
+        if (currentUser) {
+          const { errorTracking } = await import('./utils/errorTracking');
+          errorTracking.setUser(currentUser.id, currentUser.email);
+        }
+      } catch (error) {
+        const { logError } = await import('./utils/errors');
+        logError(error, 'checkAuth');
+        setUser(null);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
   }, []);
 
   // --- Load Data on Auth Change ---
@@ -95,10 +131,10 @@ const App: React.FC = () => {
       if (user) {
         setIsLoadingData(true);
         try {
-          // Initialize DB for user if new
-          await dbService.initUserData(user);
+          // Initialize user data (백엔드에서 자동 처리)
+          await apiService.initUserData(user);
 
-          // Fetch all data in parallel
+          // Fetch all data in parallel from API
           const [
             fullUser,
             fridgeData, 
@@ -108,13 +144,13 @@ const App: React.FC = () => {
             shoppingData,
             todayStatus
           ] = await Promise.all([
-            dbService.getUser(user.id),
-            dbService.getFridge(user.id),
-            dbService.getPlan(user.id),
-            dbService.getLikedRecipes(user.id),
-            dbService.getDislikedRecipes(user.id),
-            dbService.getShoppingChecks(user.id),
-            dbService.getTodayFinished(user.id)
+            apiService.getUser(user.id),
+            apiService.getFridge(user.id),
+            apiService.getPlan(user.id),
+            apiService.getLikedRecipes(user.id),
+            apiService.getDislikedRecipes(user.id),
+            apiService.getShoppingChecks(user.id),
+            apiService.getTodayFinished(user.id)
           ]);
 
           setPreferences(fullUser?.preferences);
@@ -126,7 +162,8 @@ const App: React.FC = () => {
           setTodayMealFinished(todayStatus);
 
         } catch (e) {
-          console.error("Failed to load user data", e);
+          const { logError } = await import('./utils/errors');
+          logError(e, 'loadUserData');
         } finally {
           setIsLoadingData(false);
         }
@@ -134,7 +171,7 @@ const App: React.FC = () => {
         // Clear state on logout
         setFridge([]);
         setPreferences(undefined);
-        setPlannedRecipes(Array(14).fill(null));
+        setPlannedRecipes(Array(WEEKLY_PLAN_SLOTS).fill(null));
         setLikedRecipes([]);
         setDislikedRecipes([]);
         setShoppingListChecks({});
@@ -147,52 +184,76 @@ const App: React.FC = () => {
 
   // --- Auth Actions ---
   const login = async (provider: 'kakao' | 'google') => {
-    let loggedUser;
     if (provider === 'kakao') {
-      loggedUser = await authService.loginWithKakao();
+      // 카카오 로그인: 카카오 인가 서버로 리다이렉트
+      // 리다이렉트되므로 여기서는 아무것도 하지 않음
+      authService.loginWithKakao();
     } else {
-      loggedUser = await authService.loginWithGoogle();
+      // Google 로그인은 아직 구현 안 됨
+      throw new Error('Google login not implemented yet');
     }
-    setUser(loggedUser);
   };
 
   const logout = async () => {
     await authService.logout();
     setUser(null);
+    
+    // 에러 추적 서비스에서 사용자 정보 제거
+    const { errorTracking } = await import('./utils/errorTracking');
+    errorTracking.clearUser();
   };
 
   const deleteAccount = async () => {
     if (user) {
-      await dbService.deleteAccount(user.id);
+      await apiService.deleteAccount(user.id);
       await logout();
     }
   };
 
-  // --- Data Actions (Proxies to DB) ---
+  // --- Data Actions (Proxies to API) ---
   const updatePreferences = async (prefs: UserPreferences) => {
     if (!user) return;
     setPreferences(prefs);
-    await dbService.updateUserPreferences(user.id, prefs);
+    await apiService.updateUserPreferences(user.id, prefs);
   };
 
   const toggleFridgeItem = async (item: string) => {
     if (!user) return;
     // Optimistic Update
     setFridge(prev => prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]);
-    // DB Update
-    await dbService.toggleFridgeItem(user.id, item);
+    // API Update
+    try {
+      const updatedFridge = await apiService.toggleFridgeItem(user.id, item);
+      setFridge(updatedFridge);
+    } catch (error) {
+      // Rollback on error
+      setFridge(prev => prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]);
+      throw error;
+    }
   };
 
   const addLikedRecipe = async (recipe: Recipe) => {
     if (!user) return;
     setLikedRecipes(prev => [...prev, recipe]);
-    await dbService.addLikedRecipe(user.id, recipe.id);
+    try {
+      await apiService.addLikedRecipe(user.id, recipe.id);
+    } catch (error) {
+      // Rollback on error
+      setLikedRecipes(prev => prev.filter(r => r.id !== recipe.id));
+      throw error;
+    }
   };
 
   const addDislikedRecipe = async (recipe: Recipe) => {
     if (!user) return;
     setDislikedRecipes(prev => [...prev, recipe]);
-    await dbService.addDislikedRecipe(user.id, recipe.id);
+    try {
+      await apiService.addDislikedRecipe(user.id, recipe.id);
+    } catch (error) {
+      // Rollback on error
+      setDislikedRecipes(prev => prev.filter(r => r.id !== recipe.id));
+      throw error;
+    }
   };
 
   const updatePlan = async (index: number, recipe: Recipe) => {
@@ -200,7 +261,13 @@ const App: React.FC = () => {
     const newPlan = [...plannedRecipes];
     newPlan[index] = recipe;
     setPlannedRecipes(newPlan);
-    await dbService.updatePlanSlot(user.id, index, recipe);
+    try {
+      await apiService.updatePlanSlot(user.id, index, recipe);
+    } catch (error) {
+      // Rollback on error
+      setPlannedRecipes(plannedRecipes);
+      throw error;
+    }
   };
 
   // Local/Hybrid generation (Using Scored Logic)
@@ -210,13 +277,14 @@ const App: React.FC = () => {
         // Use the advanced scoring algorithm that respects preferences and fridge
         const scoredRecipes = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
         
-        const newPlan: (Recipe | null)[] = Array(14).fill(null);
-        scoredRecipes.slice(0, 14).forEach((r, i) => newPlan[i] = r);
+        const newPlan: (Recipe | null)[] = Array(WEEKLY_PLAN_SLOTS).fill(null);
+        scoredRecipes.slice(0, WEEKLY_PLAN_SLOTS).forEach((r, i) => newPlan[i] = r);
         
         setPlannedRecipes(newPlan);
-        await dbService.savePlan(user.id, newPlan);
+        await apiService.savePlan(user.id, newPlan);
     } catch (e) {
-        console.error("Error generating plan", e);
+        const { logError } = await import('./utils/errors');
+        logError(e, 'generatePlan');
         throw e; // Propagate error for UI handling
     }
   };
@@ -233,7 +301,8 @@ const App: React.FC = () => {
       // Re-use the same scoring logic
       await generatePlan();
     } catch (error) {
-      console.error("Plan Generation Failed", error);
+      const { logError } = await import('./utils/errors');
+      logError(error, 'generateAIPlan');
       alert("식단 생성 중 오류가 발생했습니다.");
     } finally {
       setIsGeneratingPlan(false);
@@ -243,23 +312,43 @@ const App: React.FC = () => {
   const toggleShoppingItem = async (name: string) => {
     if (!user) return;
     setShoppingListChecks(prev => ({ ...prev, [name]: !prev[name] }));
-    await dbService.toggleShoppingCheck(user.id, name);
+    try {
+      const updatedChecks = await apiService.toggleShoppingCheck(user.id, name);
+      setShoppingListChecks(updatedChecks);
+    } catch (error) {
+      // Rollback on error
+      setShoppingListChecks(prev => ({ ...prev, [name]: !prev[name] }));
+      throw error;
+    }
   };
 
   const toggleTodayMealFinished = async () => {
     if (!user) return;
     setTodayMealFinished(prev => !prev);
-    await dbService.toggleTodayFinished(user.id);
+    try {
+      const finished = await apiService.toggleTodayFinished(user.id);
+      setTodayMealFinished(finished);
+    } catch (error) {
+      // Rollback on error
+      setTodayMealFinished(prev => !prev);
+      throw error;
+    }
   };
 
   const toggleMealFinished = useCallback(async (dateKey: string, mealType: 'lunch' | 'dinner') => {
     if (!user) return;
-    await dbService.toggleMealFinished(user.id, dateKey, mealType);
+    try {
+      await apiService.toggleMealFinished(user.id, dateKey, mealType);
+    } catch (error) {
+      const { logError } = await import('./utils/errors');
+      logError(error, 'toggleMealFinished');
+      throw error;
+    }
   }, [user]);
 
   const getMealFinished = useCallback(async (dateKey: string, mealType: 'lunch' | 'dinner'): Promise<boolean> => {
     if (!user) return false;
-    return await dbService.getMealFinished(user.id, dateKey, mealType);
+    return await apiService.getMealFinished(user.id, dateKey, mealType);
   }, [user]);
 
   const resetSession = async () => {
@@ -267,12 +356,24 @@ const App: React.FC = () => {
     setLikedRecipes([]);
     setDislikedRecipes([]);
     setTodayMealFinished(false);
-    await dbService.resetSession(user.id);
+    await apiService.resetSession(user.id);
   };
+
+  // 인증 확인 중일 때 로딩 표시
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-500">로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <AppContext.Provider value={{ 
-      user, login, logout, deleteAccount,
+      user, isCheckingAuth, login, logout, deleteAccount,
       preferences, updatePreferences,
       fridge, toggleFridgeItem, 
       likedRecipes, addLikedRecipe, 
@@ -284,32 +385,35 @@ const App: React.FC = () => {
       toggleMealFinished, getMealFinished,
       resetSession
     }}>
-      <HashRouter>
-        <div className="min-h-screen bg-gray-50 flex justify-center">
-          <div className="w-full max-w-md bg-white min-h-screen shadow-xl relative flex flex-col">
-            
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-               <Routes>
-                {/* Public Route */}
-                <Route path="/login" element={<LoginPage />} />
+      <ErrorBoundary>
+        <HashRouter>
+          <div className="min-h-screen bg-gray-50 flex justify-center">
+            <div className="w-full max-w-md bg-white min-h-screen shadow-xl relative flex flex-col">
+              
+              <div className="flex-1 overflow-y-auto no-scrollbar">
+                 <Routes>
+                  {/* Public Routes */}
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-                {/* Protected Routes */}
-                <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
-                <Route path="/fridge" element={<ProtectedRoute><FridgePage /></ProtectedRoute>} />
-                <Route path="/swipe" element={<ProtectedRoute><SwipePage /></ProtectedRoute>} />
-                <Route path="/plan" element={<ProtectedRoute><PlanPage /></ProtectedRoute>} />
-                <Route path="/list" element={<ProtectedRoute><ListPage /></ProtectedRoute>} />
-                <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-                
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
+                  {/* Protected Routes */}
+                  <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+                  <Route path="/fridge" element={<ProtectedRoute><FridgePage /></ProtectedRoute>} />
+                  <Route path="/swipe" element={<ProtectedRoute><SwipePage /></ProtectedRoute>} />
+                  <Route path="/plan" element={<ProtectedRoute><PlanPage /></ProtectedRoute>} />
+                  <Route path="/list" element={<ProtectedRoute><ListPage /></ProtectedRoute>} />
+                  <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+                  
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </div>
+
+              {/* Bottom Nav - Only show if logged in */}
+              {user && <BottomNav />}
             </div>
-
-            {/* Bottom Nav - Only show if logged in */}
-            {user && <BottomNav />}
           </div>
-        </div>
-      </HashRouter>
+        </HashRouter>
+      </ErrorBoundary>
     </AppContext.Provider>
   );
 };

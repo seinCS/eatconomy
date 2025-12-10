@@ -1,11 +1,50 @@
 import { Recipe } from './types';
 
-// Blacklist for Chain Cooking logic (기본 양념 필터링)
-export const STAPLES = ['소금', '설탕', '물', '파', '마늘', '밥', '김치', '간장', '고춧가루', '후추', '식용유', '참기름', '깨', '식초', '맛술', '올리고당', '다진마늘', '부침가루', '전분', '깨소금', '다시다', '미림'];
+// ============================================
+// 애플리케이션 상수
+// ============================================
 
-export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+/**
+ * 주간 식단표 슬롯 수 (7일 × 2끼 = 14개)
+ */
+export const WEEKLY_PLAN_SLOTS = 14;
 
-// 50 Representative Recipes for MVP (Data Seeding)
+/**
+ * 스와이프 페이지에서 보여줄 레시피 수
+ */
+export const SWIPE_CARD_COUNT = 10;
+
+/**
+ * 요일 배열
+ */
+export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+
+/**
+ * 식사 타입
+ */
+export const MEAL_TYPES = {
+  LUNCH: 'lunch',
+  DINNER: 'dinner',
+} as const;
+
+export type MealType = typeof MEAL_TYPES[keyof typeof MEAL_TYPES];
+
+// ============================================
+// 레시피 및 재료 데이터
+// ============================================
+
+/**
+ * Chain Cooking 알고리즘에서 제외할 기본 양념
+ */
+export const STAPLES = [
+  '소금', '설탕', '물', '파', '마늘', '밥', '김치', '간장', '고춧가루', 
+  '후추', '식용유', '참기름', '깨', '식초', '맛술', '올리고당', 
+  '다진마늘', '부침가루', '전분', '깨소금', '다시다', '미림'
+] as const;
+
+/**
+ * 50개 대표 레시피 (MVP 데이터)
+ */
 export const SEED_RECIPES: Recipe[] = [
   // --- 1. 돼지고기 & 김치 베이스 (Existing + Expanded) ---
   { id: 101, name: "돼지고기 김치찌개", ingredients: ["돼지고기", "김치", "두부", "파", "마늘"], tags: ["#국물", "#한식", "#소울푸드"], time: "30분", calories: 450 },
@@ -72,8 +111,16 @@ export const SEED_RECIPES: Recipe[] = [
   { id: 150, name: "감자전", ingredients: ["감자", "소금", "식용유"], tags: ["#비오는날", "#고소"], time: "20분", calories: 300 }
 ];
 
-// 초기 냉장고 상태 (테스트용 다양화)
-export const MOCK_FRIDGE = ["계란", "김치", "양파", "스팸", "두부", "감자", "돼지고기", "파스타면"];
+/**
+ * 초기 냉장고 상태 (테스트용)
+ */
+export const MOCK_FRIDGE = [
+  "계란", "김치", "양파", "스팸", "두부", "감자", "돼지고기", "파스타면"
+] as const;
+
+// ============================================
+// 재료 카테고리
+// ============================================
 
 export const INGREDIENT_CATEGORIES = {
   VEGETABLES: "채소/과일",
@@ -82,9 +129,11 @@ export const INGREDIENT_CATEGORIES = {
   DAIRY: "유제품/곡류",
   SAUCES: "양념/오일",
   PROCESSED: "가공식품/기타"
-};
+} as const;
 
-// 이름과 카테고리가 매핑된 마스터 데이터
+/**
+ * 이름과 카테고리가 매핑된 마스터 데이터
+ */
 export const MASTER_INGREDIENTS = [
   // 채소류
   { name: "양파", category: INGREDIENT_CATEGORIES.VEGETABLES },
@@ -141,13 +190,24 @@ export const MASTER_INGREDIENTS = [
   { name: "소세지", category: INGREDIENT_CATEGORIES.PROCESSED },
   { name: "김", category: INGREDIENT_CATEGORIES.PROCESSED },
   { name: "떡", category: INGREDIENT_CATEGORIES.PROCESSED }
-];
+] as const;
 
-// UI Helpers for Profile
+// ============================================
+// 프로필 설정 옵션
+// ============================================
+
+/**
+ * 일반적인 알레르기 원인 식품
+ */
 export const COMMON_ALLERGENS = [
-  "계란", "우유", "땅콩", "대두", "밀", "고등어", "게", "새우", "돼지고기", "복숭아", "토마토", "조개류"
-];
+  "계란", "우유", "땅콩", "대두", "밀", "고등어", "게", "새우", 
+  "돼지고기", "복숭아", "토마토", "조개류"
+] as const;
 
+/**
+ * 일반적으로 싫어하는 음식
+ */
 export const COMMON_DISLIKED_FOODS = [
-  "오이", "당근", "가지", "브로콜리", "피망", "고수", "버섯", "생굴", "콩밥", "파"
-];
+  "오이", "당근", "가지", "브로콜리", "피망", "고수", "버섯", 
+  "생굴", "콩밥", "파"
+] as const;

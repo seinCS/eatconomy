@@ -4,6 +4,7 @@ import { Sparkles, TrendingUp, Check, Utensils, ChevronRight, User as UserIcon, 
 import { useNavigate, useLocation } from 'react-router-dom';
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts';
 import { Recipe } from '../types';
+import { getTodayDateKey, getTodayMealIndices } from '../utils/date';
 
 const data = [
   { name: '1주', saved: 25000 },
@@ -22,25 +23,13 @@ const HomePage: React.FC = () => {
   // Check if a plan exists
   const hasPlan = plannedRecipes.some(r => r !== null);
 
-  // Get today's date key
-  const getTodayDateKey = useCallback(() => {
-    const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  }, []);
-
   // Determine Today's Meals
   useEffect(() => {
     if (hasPlan) {
-      const now = new Date();
-      const day = now.getDay(); // 0=Sun, 1=Mon...
-      // Convert to 0=Mon, 6=Sun
-      const dayIdx = day === 0 ? 6 : day - 1; 
+      const { lunchIndex, dinnerIndex } = getTodayMealIndices();
       
-      const lunchIdx = dayIdx * 2;
-      const dinnerIdx = dayIdx * 2 + 1;
-      
-      const lunch = plannedRecipes[lunchIdx];
-      const dinner = plannedRecipes[dinnerIdx];
+      const lunch = plannedRecipes[lunchIndex];
+      const dinner = plannedRecipes[dinnerIndex];
 
       if (lunch || dinner) {
         setTodaysMeals({ lunch, dinner });

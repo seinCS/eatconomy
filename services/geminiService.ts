@@ -2,14 +2,19 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Recipe, UserPreferences } from "../types";
 import { SEED_RECIPES } from "../constants";
 
+/// <reference types="vite/client" />
+
 // Helper to get API key safely supporting Vite and Node
 const getApiKey = (): string | undefined => {
   // Check for Vite environment variable
-  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
-    return import.meta.env.VITE_GEMINI_API_KEY;
+  if (import.meta.env.VITE_GEMINI_API_KEY) {
+    return import.meta.env.VITE_GEMINI_API_KEY as string;
   }
-  // Fallback to standard process.env
-  return process.env.API_KEY;
+  // Fallback to standard process.env (Node.js 환경용)
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env.API_KEY;
+  }
+  return undefined;
 };
 
 export const generateRecipeTip = async (recipe: Recipe, context?: string): Promise<string> => {

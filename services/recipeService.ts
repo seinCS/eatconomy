@@ -1,5 +1,5 @@
 
-import { SEED_RECIPES, STAPLES } from '../constants';
+import { SEED_RECIPES, STAPLES, WEEKLY_PLAN_SLOTS } from '../constants';
 import { Recipe, UserPreferences } from '../types';
 
 export const getAllRecipes = (): Recipe[] => {
@@ -113,7 +113,7 @@ export const generateFullWeekPlan = (
   const validAllRecipes = allRecipes.filter(r => !dislikedIds.includes(r.id));
   const validLikedRecipes = likedRecipes.filter(r => !dislikedIds.includes(r.id));
 
-  const newPlan: (Recipe | null)[] = Array(14).fill(null);
+  const newPlan: (Recipe | null)[] = Array(WEEKLY_PLAN_SLOTS).fill(null);
   let likedIdx = 0;
 
   if (validLikedRecipes.length > 0) {

@@ -34,3 +34,31 @@ export interface ChainConnection {
   toId: number;
   sharedIngredients: string[];
 }
+
+/**
+ * 사용자 정보 타입
+ */
+export interface User {
+  id: string;
+  email: string;
+  nickname: string;
+  avatarUrl: string;
+  preferences?: UserPreferences;
+}
+
+/**
+ * API 응답 타입
+ */
+export interface ApiResponse<T> {
+  data: T;
+  message?: string;
+}
+
+/**
+ * 에러 응답 타입
+ */
+export interface ApiError {
+  message: string;
+  statusCode?: number;
+  error?: string;
+}
