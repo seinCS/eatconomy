@@ -74,9 +74,9 @@ export const generateWeeklyPlanWithLLM = async (
     return true;
   });
 
-  // 2. 레시피 데이터베이스 요약 (메타데이터 포함)
+  // 2. 레시피 데이터베이스 요약 (간결한 형식)
   const recipeDbSummary = candidateRecipes.map(r => {
-    const nonStapleIngredients = r.ingredients.filter(ing => !STAPLES.includes(ing));
+    const nonStapleIngredients = r.ingredients.filter(ing => !(STAPLES as readonly string[]).includes(ing));
     const matchCount = nonStapleIngredients.filter(ing => fridgeItems.includes(ing)).length;
     const matchRatio = nonStapleIngredients.length > 0 ? (matchCount / nonStapleIngredients.length) * 100 : 0;
     
@@ -100,94 +100,45 @@ export const generateWeeklyPlanWithLLM = async (
       else if (r.calories > 550) mealType = 'dinner';
     }
     
-    const isLiked = likedIds.includes(r.id);
-    
     return {
       id: r.id,
-      name: r.name,
-      ingredients: r.ingredients,
-      nonStapleIngredients,
-      matchRatio: Math.round(matchRatio),
-      matchCount,
-      calories: r.calories,
-      tags: r.tags,
+      name: r.name, // 정확한 메뉴명 유지
       dishType,
       mealType,
-      isLiked,
-      time: r.time,
+      calories: r.calories,
+      matchRatio: Math.round(matchRatio),
+      isLiked: likedIds.includes(r.id),
     };
   }).sort((a, b) => {
-    // 좋아요 레시피 우선 정렬
     if (a.isLiked && !b.isLiked) return -1;
     if (!a.isLiked && b.isLiked) return 1;
-    // 재료 매칭률 높은 순
     return b.matchRatio - a.matchRatio;
   });
 
-  // 3. 사용자 컨텍스트 구성
-  const userContext = {
-    fridgeInventory: fridgeItems,
-    allergies: allergenList,
-    dislikedFoods: dislikedFoodList,
-    spicinessLevel: preferences?.spicinessLevel || 2,
-    cookingSkill: preferences?.cookingSkill || 'Beginner',
-    likedRecipeIds: likedIds,
-    dislikedRecipeIds: dislikedIds,
-  };
+  // 3. 간결한 시스템 프롬프트
+  const systemPrompt = `7일 식단표 생성 (14끼: 점심/저녁 × 7일). 레시피 DB에서만 선택하세요.
 
-  // 4. 시스템 프롬프트 작성 (기존 스코어링 로직 반영)
-  const systemPrompt = `You are an expert meal planning assistant for a single-person household. Your task is to create a 7-day meal plan (14 meals: lunch and dinner for each day) by selecting recipes from the provided Recipe Database.
+규칙:
+1. 각 끼니: 메인 1개 + 반찬 1개(선택)
+2. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
+3. 고려시항: 재료매칭률, 좋아요 레시피, 점심(가벼운)/저녁(든든한)
+4. 재료 전략: 같은 날 반복 최소화, 다른 날 연결 최대화
+5. 매운맛: ${preferences?.spicinessLevel === 1 ? '순한맛만' : '제한없음'}
 
-**CRITICAL CONSTRAINTS:**
-1. SELECTION ONLY: You must ONLY select recipes from the Recipe Database. Do NOT invent new recipes.
-2. MEAL STRUCTURE: Each meal must consist of:
-   - 1 main dish (dishType: 'main')
-   - 1 side dish (dishType: 'side', can be null if no suitable side dish available)
-3. SAFETY FIRST: NEVER select recipes containing allergens: ${allergenList.length > 0 ? allergenList.join(', ') : 'None'}
-
-**SCORING CRITERIA (Prioritize in this order):**
-1. **Ingredient Matching Priority**: Prefer recipes with high matchRatio (재료 매칭률). Recipes with ingredients already in the fridge should be prioritized.
-2. **Liked Recipes Bonus**: If a recipe has isLiked: true, prioritize it significantly.
-3. **Meal Type Suitability**: 
-   - Lunch: Prefer lighter meals (calories < 400) and recipes with mealType: 'lunch' or 'both'
-   - Dinner: Prefer heartier meals (calories > 500) and recipes with mealType: 'dinner' or 'both'
-4. **Ingredient Diversity Strategy**:
-   - MINIMIZE ingredient repetition within the SAME day (avoid using same ingredients for lunch and dinner on the same day)
-   - MAXIMIZE ingredient connection across DIFFERENT days (reuse ingredients from previous day's dinner in today's lunch for efficient cooking)
-5. **Spiciness Preference**: If user's spicinessLevel is 1 (mild), avoid recipes with spicy tags (#매콤, #얼큰, #불닭, etc.)
-
-**Recipe Database:**
+레시피 DB:
 ${recipeDbSummary.map(r => 
-  `ID: ${r.id} | Name: "${r.name}" | Type: ${r.dishType}/${r.mealType} | Ingredients: [${r.ingredients.join(', ')}] | Match: ${r.matchRatio}% | Calories: ${r.calories} | Liked: ${r.isLiked} | Tags: ${r.tags.join(', ')}`
-).join('\n')}
+  `${r.id}:${r.name}(${r.dishType}/${r.mealType},${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''})`
+).join(' ')}
 
-**User Profile:**
-- Fridge Inventory: ${userContext.fridgeInventory.join(', ')}
-- Allergies: ${userContext.allergies.length > 0 ? userContext.allergies.join(', ') : 'None'}
-- Disliked Foods: ${userContext.dislikedFoods.length > 0 ? userContext.dislikedFoods.join(', ') : 'None'}
-- Spiciness Level: ${userContext.spicinessLevel}/3
-- Cooking Skill: ${userContext.cookingSkill}
-- Liked Recipe IDs: ${userContext.likedRecipeIds.length > 0 ? userContext.likedRecipeIds.join(', ') : 'None'}
-- Disliked Recipe IDs: ${userContext.dislikedRecipeIds.length > 0 ? userContext.dislikedRecipeIds.join(', ') : 'None'}
+냉장고: ${fridgeItems.join(',')}
+좋아요ID: ${likedIds.length > 0 ? likedIds.join(',') : '없음'}
+싫어요ID: ${dislikedIds.length > 0 ? dislikedIds.join(',') : '없음'}
 
-**Output Format:**
-Return a weekly plan with exactly 14 meals (7 days × 2 meals per day).
-Each meal should have:
-- day: 0 (Monday) to 6 (Sunday)
-- mealType: 'lunch' or 'dinner'
-- mainRecipeId: ID of the main dish
-- sideRecipeId: ID of the side dish (can be null if no suitable side dish)
-- reasoning: Brief explanation in Korean why this combination was chosen
-
-**Important Notes:**
-- Ensure variety: Don't repeat the same recipe within the week
-- Balance nutrition: Mix different types of dishes (soup, stir-fry, rice bowl, etc.)
-- Consider cooking efficiency: Connect ingredients across days when possible
-- Respect meal type preferences: Lighter meals for lunch, heartier meals for dinner`;
+출력: 14개 식사(day:0-6, mealType:lunch/dinner, mainRecipeId, sideRecipeId, reasoning)`;
 
   try {
     // 5. OpenAI API 호출 (structured output with JSON Schema)
-    const completion = await openai.beta.chat.completions.parse({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -196,7 +147,7 @@ Each meal should have:
         },
         {
           role: 'user',
-          content: 'Create a 7-day meal plan (14 meals total) following all the constraints and scoring criteria provided.',
+          content: '14개 식사 생성 (day:0-6, mealType:lunch/dinner, mainRecipeId, sideRecipeId, reasoning)',
         },
       ],
       response_format: {
@@ -216,7 +167,7 @@ Each meal should have:
                     mealType: { type: 'string', enum: ['lunch', 'dinner'] },
                     mainRecipeId: { type: 'integer' },
                     sideRecipeId: { 
-                      anyOf: [
+                      oneOf: [
                         { type: 'integer' },
                         { type: 'null' }
                       ]
@@ -236,11 +187,21 @@ Each meal should have:
           strict: true,
         },
       },
-      temperature: 0.7, // 창의성과 일관성의 균형
+      temperature: 0.7,
     });
 
     // 6. 응답 파싱 및 검증
-    const parsedResponse = completion.choices[0].message.parsed as { weeklyPlan: WeeklyPlanResponse['weeklyPlan'] };
+    const responseContent = completion.choices[0].message.content;
+    if (!responseContent || typeof responseContent !== 'string') {
+      throw new Error('Invalid response content from OpenAI');
+    }
+    
+    let parsedResponse: { weeklyPlan: WeeklyPlanResponse['weeklyPlan'] };
+    try {
+      parsedResponse = JSON.parse(responseContent);
+    } catch (parseError) {
+      throw new Error(`Failed to parse OpenAI response: ${parseError}`);
+    }
     
     if (!parsedResponse?.weeklyPlan || parsedResponse.weeklyPlan.length !== 14) {
       throw new Error(`Invalid response format from OpenAI: expected 14 meals, got ${parsedResponse?.weeklyPlan?.length || 0}`);
@@ -249,29 +210,35 @@ Each meal should have:
     // Zod 스키마로 검증
     const validated = WeeklyPlanSchema.parse(parsedResponse);
 
-    // 7. MealSet[] 구조로 변환
+    // 7. MealSet[] 구조로 변환 (레시피 DB의 정확한 형식 준수)
     const mealSets: MealSet[] = Array(14).fill(null).map(() => ({ main: null, side: null }));
 
     for (const item of validated.weeklyPlan) {
       const slotIndex = item.day * 2 + (item.mealType === 'lunch' ? 0 : 1);
       
-      // 메인 레시피 찾기
+      // 메인 레시피 찾기 (ID로 정확히 매칭)
       const mainRecipe = SEED_RECIPES.find(r => r.id === item.mainRecipeId);
       if (mainRecipe) {
+        // 원본 레시피 데이터를 그대로 사용 (메뉴명, 재료명 등 정확히 유지)
         mealSets[slotIndex].main = {
           ...mainRecipe,
           reason: item.reasoning,
         };
+      } else {
+        console.warn(`[OpenAI] 메인 레시피 ID ${item.mainRecipeId}를 찾을 수 없습니다.`);
       }
 
-      // 반찬 레시피 찾기
+      // 반찬 레시피 찾기 (ID로 정확히 매칭)
       if (item.sideRecipeId !== null) {
         const sideRecipe = SEED_RECIPES.find(r => r.id === item.sideRecipeId);
         if (sideRecipe) {
+          // 원본 레시피 데이터를 그대로 사용
           mealSets[slotIndex].side = {
             ...sideRecipe,
             reason: item.reasoning,
           };
+        } else {
+          console.warn(`[OpenAI] 반찬 레시피 ID ${item.sideRecipeId}를 찾을 수 없습니다.`);
         }
       }
     }
