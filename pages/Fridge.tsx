@@ -2,27 +2,13 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../App';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Refrigerator, Search, X, Loader2 } from 'lucide-react';
+import { Refrigerator, Search, X } from 'lucide-react';
 import { INGREDIENT_CATEGORIES, MASTER_INGREDIENTS } from '../constants';
 
 const FridgePage: React.FC = () => {
-  const { fridge, toggleFridgeItem, generateAIPlan, isGeneratingPlan } = useApp();
+  const { fridge, toggleFridgeItem } = useApp();
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
-
-  const handleStartPlanning = async () => {
-    if (fridge.length === 0) {
-        alert("냉장고에 재료를 최소 1개 이상 넣어주세요!");
-        return;
-    }
-
-    // Updated Confirmation Text
-    if (window.confirm("현재 재료와 취향을 분석해 최적의 식단을 구성합니다. 시작할까요?")) {
-        // NOTE: Do not reset session here to keep Swipe preferences
-        await generateAIPlan();
-        navigate('/plan');
-    }
-  };
 
   const getEmoji = (name: string, category: string) => {
     if (name.includes('계란')) return '🥚';
@@ -100,15 +86,6 @@ const FridgePage: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 pb-24 relative">
-        {/* Loading Overlay */}
-        {isGeneratingPlan && (
-            <div className="absolute inset-0 bg-white/80 z-[70] flex flex-col items-center justify-center backdrop-blur-sm">
-                <Loader2 size={48} className="text-orange-500 animate-spin mb-4" />
-                <h2 className="text-lg font-bold text-gray-900">맞춤 식단을 분석 중이에요</h2>
-                <p className="text-sm text-gray-500">재료와 취향을 계산하는 중...</p>
-            </div>
-        )}
-
         {/* Sticky Header with Search */}
         <div className="sticky top-0 bg-white z-40 border-b border-gray-100 shadow-sm px-6 pt-6 pb-4">
              <div className="flex justify-between items-center mb-4">
@@ -174,20 +151,6 @@ const FridgePage: React.FC = () => {
                      ))}
                 </div>
             )}
-        </div>
-
-        {/* Floating Action Button area - Z-index 60 - Fixed Layout */}
-        <div className="fixed bottom-24 left-0 w-full px-6 flex justify-center z-[60]">
-            <div className="w-full max-w-md">
-                <button 
-                    onClick={handleStartPlanning}
-                    disabled={isGeneratingPlan}
-                    className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold text-lg shadow-xl flex items-center justify-center group active:scale-98 transition-transform disabled:opacity-70 disabled:cursor-not-allowed"
-                >
-                    <Sparkles className="mr-2 text-yellow-400 group-hover:rotate-12 transition-transform" />
-                    {isGeneratingPlan ? '분석 중...' : '이 재료로 식단 추천받기'}
-                </button>
-            </div>
         </div>
     </div>
   );
