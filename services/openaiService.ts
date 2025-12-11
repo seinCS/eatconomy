@@ -25,7 +25,7 @@ const WeeklyPlanSchema = z.object({
       day: z.number().int().min(0).max(6), // 0=월요일, 6=일요일
       mealType: z.enum(['lunch', 'dinner']),
       mainRecipeId: z.number().int(),
-      sideRecipeId: z.number().int().nullable(),
+      sideRecipeId: z.number().int().nullable().optional(), // optional로 처리
       reasoning: z.string().describe('이 메뉴를 선택한 이유'),
     })
   ).length(14), // 정확히 14개 (7일 × 2끼)
@@ -172,14 +172,13 @@ ${recipeDbSummary.map(r =>
                     mealType: { type: 'string', enum: ['lunch', 'dinner'] },
                     mainRecipeId: { type: 'integer' },
                     sideRecipeId: { 
-                      oneOf: [
-                        { type: 'integer' },
-                        { type: 'null' }
-                      ]
+                      type: 'integer',
+                      description: '반찬 레시피 ID (없으면 생략 가능)'
                     },
                     reasoning: { type: 'string' },
                   },
-                  required: ['day', 'mealType', 'mainRecipeId', 'sideRecipeId', 'reasoning'],
+                  required: ['day', 'mealType', 'mainRecipeId', 'reasoning'],
+                  // sideRecipeId는 optional (nullable이므로 required에서 제외)
                   additionalProperties: false,
                 },
                 minItems: 14,
