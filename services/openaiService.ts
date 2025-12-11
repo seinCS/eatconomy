@@ -172,13 +172,13 @@ ${recipeDbSummary.map(r =>
                     mealType: { type: 'string', enum: ['lunch', 'dinner'] },
                     mainRecipeId: { type: 'integer' },
                     sideRecipeId: { 
-                      type: 'integer',
-                      description: '반찬 레시피 ID (없으면 생략 가능)'
+                      type: ['integer', 'null'],
+                      description: '반찬 레시피 ID (없으면 null)'
                     },
                     reasoning: { type: 'string' },
                   },
-                  required: ['day', 'mealType', 'mainRecipeId', 'reasoning'],
-                  // sideRecipeId는 optional (nullable이므로 required에서 제외)
+                  required: ['day', 'mealType', 'mainRecipeId', 'sideRecipeId', 'reasoning'],
+                  // strict mode에서는 properties의 모든 키가 required에 포함되어야 함
                   additionalProperties: false,
                 },
                 minItems: 14,
