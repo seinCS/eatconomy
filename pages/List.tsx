@@ -9,9 +9,8 @@ const ListPage: React.FC = () => {
   const [items, setItems] = useState<{name: string, count: number}[]>([]);
 
   useEffect(() => {
-    // Filter out nulls
-    const validPlan = plannedRecipes.filter((r): r is Recipe => r !== null);
-    const rawList = generateShoppingList(validPlan, fridge);
+    // MealSet[]를 그대로 전달 (generateShoppingList가 MealSet[]를 받도록 업데이트됨)
+    const rawList = generateShoppingList(plannedRecipes, fridge);
     setItems(rawList);
   }, [plannedRecipes, fridge]);
 

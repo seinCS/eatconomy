@@ -21,15 +21,19 @@ const HomePage: React.FC = () => {
   const [mealsFinished, setMealsFinished] = useState<{lunch: boolean, dinner: boolean}>({ lunch: false, dinner: false });
 
   // Check if a plan exists
-  const hasPlan = plannedRecipes.some(r => r !== null);
+  const hasPlan = plannedRecipes.some(ms => ms.main !== null || ms.side !== null);
 
   // Determine Today's Meals
   useEffect(() => {
     if (hasPlan) {
       const { lunchIndex, dinnerIndex } = getTodayMealIndices();
       
-      const lunch = plannedRecipes[lunchIndex];
-      const dinner = plannedRecipes[dinnerIndex];
+      const lunchSet = plannedRecipes[lunchIndex];
+      const dinnerSet = plannedRecipes[dinnerIndex];
+
+      // 메인만 표시 (기존 호환성 유지)
+      const lunch = lunchSet?.main || null;
+      const dinner = dinnerSet?.main || null;
 
       if (lunch || dinner) {
         setTodaysMeals({ lunch, dinner });

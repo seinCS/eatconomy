@@ -12,7 +12,7 @@ import LoginPage from './pages/Login';
 import ProfilePage from './pages/Profile';
 import AuthCallbackPage from './pages/AuthCallback';
 import ErrorBoundary from './components/ErrorBoundary';
-import { Recipe, UserPreferences, User } from './types';
+import { Recipe, UserPreferences, User, MealSet } from './types';
 import { getAllRecipes, generateScoredWeeklyPlan } from './services/recipeService';
 import { authService } from './services/authService';
 import { apiService } from './services/apiService';
@@ -36,8 +36,8 @@ interface AppContextType {
   addLikedRecipe: (recipe: Recipe) => void;
   dislikedRecipes: Recipe[];
   addDislikedRecipe: (recipe: Recipe) => void;
-  plannedRecipes: (Recipe | null)[];
-  updatePlan: (index: number, recipe: Recipe) => void;
+  plannedRecipes: MealSet[];
+  updatePlan: (index: number, mealSet: MealSet) => void;
   generatePlan: () => Promise<void>;
   generateAIPlan: () => Promise<void>; // Updated to Scored Generation
   isGeneratingPlan: boolean; // Loading state
@@ -96,7 +96,7 @@ const App: React.FC = () => {
   const [preferences, setPreferences] = useState<UserPreferences | undefined>(undefined);
   const [likedRecipes, setLikedRecipes] = useState<Recipe[]>([]);
   const [dislikedRecipes, setDislikedRecipes] = useState<Recipe[]>([]);
-  const [plannedRecipes, setPlannedRecipes] = useState<(Recipe | null)[]>(Array(WEEKLY_PLAN_SLOTS).fill(null));
+  const [plannedRecipes, setPlannedRecipes] = useState<MealSet[]>(Array(WEEKLY_PLAN_SLOTS).fill(null).map(() => ({ main: null, side: null })));
   const [shoppingListChecks, setShoppingListChecks] = useState<Record<string, boolean>>({});
   const [todayMealFinished, setTodayMealFinished] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
@@ -155,7 +155,13 @@ const App: React.FC = () => {
 
           setPreferences(fullUser?.preferences);
           setFridge(fridgeData);
-          setPlannedRecipes(planData);
+          // API에서 받은 Recipe[]를 MealSet[]로 변환 (임시)
+        // TODO: 백엔드 API가 MealSet[]를 반환하도록 업데이트 필요
+        const mealSets: MealSet[] = planData.map(recipe => ({
+          main: recipe,
+          side: null // 반찬은 나중에 별도로 로드하거나 기본값 사용
+        }));
+        setPlannedRecipes(mealSets);
           setLikedRecipes(likedData);
           setDislikedRecipes(dislikedData);
           setShoppingListChecks(shoppingData);
@@ -171,7 +177,7 @@ const App: React.FC = () => {
         // Clear state on logout
         setFridge([]);
         setPreferences(undefined);
-        setPlannedRecipes(Array(WEEKLY_PLAN_SLOTS).fill(null));
+        setPlannedRecipes(Array(WEEKLY_PLAN_SLOTS).fill(null).map(() => ({ main: null, side: null })));
         setLikedRecipes([]);
         setDislikedRecipes([]);
         setShoppingListChecks({});
@@ -256,13 +262,17 @@ const App: React.FC = () => {
     }
   };
 
-  const updatePlan = async (index: number, recipe: Recipe) => {
+  const updatePlan = async (index: number, mealSet: MealSet) => {
     if (!user) return;
     const newPlan = [...plannedRecipes];
-    newPlan[index] = recipe;
+    newPlan[index] = mealSet;
     setPlannedRecipes(newPlan);
     try {
-      await apiService.updatePlanSlot(user.id, index, recipe);
+      // API는 아직 Recipe 단일 구조를 지원하므로 메인만 저장 (임시)
+      // TODO: 백엔드 API를 MealSet 구조로 업데이트 필요
+      if (mealSet.main) {
+        await apiService.updatePlanSlot(user.id, index, mealSet.main);
+      }
     } catch (error) {
       // Rollback on error
       setPlannedRecipes(plannedRecipes);
@@ -275,13 +285,14 @@ const App: React.FC = () => {
     if (!user) return;
     try {
         // Use the advanced scoring algorithm that respects preferences and fridge
-        const scoredRecipes = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+        const mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
         
-        const newPlan: (Recipe | null)[] = Array(WEEKLY_PLAN_SLOTS).fill(null);
-        scoredRecipes.slice(0, WEEKLY_PLAN_SLOTS).forEach((r, i) => newPlan[i] = r);
+        setPlannedRecipes(mealSets);
         
-        setPlannedRecipes(newPlan);
-        await apiService.savePlan(user.id, newPlan);
+        // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
+        // TODO: 백엔드 API를 MealSet[] 구조로 업데이트 필요
+        const mainRecipes = mealSets.map(ms => ms.main);
+        await apiService.savePlan(user.id, mainRecipes);
     } catch (e) {
         const { logError } = await import('./utils/errors');
         logError(e, 'generatePlan');

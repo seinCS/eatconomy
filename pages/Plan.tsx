@@ -3,12 +3,13 @@ import { useApp } from '../App';
 import { DAYS } from '../constants';
 import { getSharedIngredients, getAlternativeRecipes, getAllRecipes } from '../services/recipeService';
 import { Clock, Link as LinkIcon, Info, Repeat, CheckCircle, TrendingUp, Flame, Leaf, Check, X, ShoppingCart } from 'lucide-react';
-import { Recipe } from '../types';
+import { Recipe, MealSet } from '../types';
 import { useNavigate } from 'react-router-dom';
 
 interface SlotData {
-    recipe: Recipe;
+    mealSet: MealSet;
     index: number;
+    isMain: boolean; // 메인인지 반찬인지
 }
 
 const PlanPage: React.FC = () => {
@@ -22,37 +23,39 @@ const PlanPage: React.FC = () => {
 
   // --- Real-time Dashboard Logic ---
   const dashboardStats = useMemo(() => {
-    const validMeals = plannedRecipes.filter((r): r is Recipe => r !== null);
+    // 모든 메인과 반찬을 합쳐서 계산
+    const allRecipes: Recipe[] = [];
+    plannedRecipes.forEach(ms => {
+      if (ms.main) allRecipes.push(ms.main);
+      if (ms.side) allRecipes.push(ms.side);
+    });
     
     // 1. Estimated Savings: (Meal Count * 15,000) - (Meal Count * 5,000) = Count * 10,000
-    const savings = validMeals.length * 10000;
+    const savings = allRecipes.length * 10000;
 
     // 2. Daily Avg Calories: Total Calories / 7
-    const totalCalories = validMeals.reduce((sum, r) => sum + r.calories, 0);
+    const totalCalories = allRecipes.reduce((sum, r) => sum + r.calories, 0);
     const avgCalories = Math.round(totalCalories / 7);
 
-    // 3. Chain Count (Zero Waste Success)
+    // 3. Chain Count (Zero Waste Success) - 다른 날 재료 연결성 확인
     let chainCount = 0;
     for (let i = 0; i < 7; i++) {
-        const lunch = plannedRecipes[i * 2];
-        const dinner = plannedRecipes[i * 2 + 1];
-        const prevDinner = i > 0 ? plannedRecipes[(i - 1) * 2 + 1] : null;
+        const lunchSet = plannedRecipes[i * 2];
+        const dinnerSet = plannedRecipes[i * 2 + 1];
+        const prevDinnerSet = i > 0 ? plannedRecipes[(i - 1) * 2 + 1] : null;
 
-        // Lunch <- Prev Dinner
-        if (prevDinner && lunch && getSharedIngredients(prevDinner, lunch).length > 0) {
+        // Lunch <- Prev Dinner (다른 날 연결 보너스)
+        if (prevDinnerSet?.main && lunchSet?.main && getSharedIngredients(prevDinnerSet.main, lunchSet.main).length > 0) {
             chainCount++;
         }
-        // Dinner <- Lunch
-        if (lunch && dinner && getSharedIngredients(lunch, dinner).length > 0) {
-            chainCount++;
-        }
+        // Dinner <- Lunch (같은 날 내 연결은 카운트하지 않음 - 요구사항 반영)
     }
 
     return { savings, avgCalories, chainCount };
   }, [plannedRecipes]);
 
-  const handleRecipeClick = (recipe: Recipe, index: number) => {
-    setSelectedSlot({ recipe, index });
+  const handleRecipeClick = (mealSet: MealSet, index: number, isMain: boolean) => {
+    setSelectedSlot({ mealSet, index, isMain });
     setIsReplacing(false); // Reset replace view
   };
 
@@ -66,11 +69,18 @@ const PlanPage: React.FC = () => {
 
   // Helper: Get chain cooking info
   const getChainInfo = (index: number) => {
-    const prevRecipe = index > 0 ? plannedRecipes[index - 1] : null;
-    const nextRecipe = index < plannedRecipes.length - 1 ? plannedRecipes[index + 1] : null;
+    const currentRecipe = selectedSlot!.isMain ? selectedSlot!.mealSet.main : selectedSlot!.mealSet.side;
+    if (!currentRecipe) return { prevChain: [], nextChain: [] };
     
-    const prevChain = prevRecipe ? getSharedIngredients(prevRecipe, selectedSlot!.recipe) : [];
-    const nextChain = nextRecipe ? getSharedIngredients(selectedSlot!.recipe, nextRecipe) : [];
+    const prevSet = index > 0 ? plannedRecipes[index - 1] : null;
+    const nextSet = index < plannedRecipes.length - 1 ? plannedRecipes[index + 1] : null;
+    
+    // 다른 날과의 연결만 확인 (하루 내 연결은 제외)
+    const prevRecipe = prevSet?.main || null;
+    const nextRecipe = nextSet?.main || null;
+    
+    const prevChain = prevRecipe ? getSharedIngredients(prevRecipe, currentRecipe) : [];
+    const nextChain = nextRecipe ? getSharedIngredients(currentRecipe, nextRecipe) : [];
     
     return { prevChain, nextChain };
   };
@@ -79,14 +89,19 @@ const PlanPage: React.FC = () => {
       if (!selectedSlot) return;
       
       const index = selectedSlot.index;
-      const prevRecipe = index > 0 ? plannedRecipes[index - 1] : null;
+      const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+      if (!currentRecipe) return;
+      
+      const prevSet = index > 0 ? plannedRecipes[index - 1] : null;
+      const prevRecipe = prevSet?.main || null;
       
       const isLunch = index % 2 === 0;
-      const otherSlotRecipe = isLunch ? plannedRecipes[index + 1] : plannedRecipes[index - 1];
+      const otherSlotSet = isLunch ? plannedRecipes[index + 1] : plannedRecipes[index - 1];
+      const otherSlotRecipe = otherSlotSet?.main || null;
 
       const all = getAllRecipes();
       const candidates = getAlternativeRecipes(
-          selectedSlot.recipe.id, 
+          currentRecipe.id, 
           prevRecipe, 
           otherSlotRecipe, 
           all, 
@@ -99,7 +114,13 @@ const PlanPage: React.FC = () => {
 
   const confirmReplacement = (newRecipe: Recipe) => {
       if (!selectedSlot) return;
-      updatePlan(selectedSlot.index, newRecipe);
+      const mealSet = { ...selectedSlot.mealSet };
+      if (selectedSlot.isMain) {
+        mealSet.main = newRecipe;
+      } else {
+        mealSet.side = newRecipe;
+      }
+      updatePlan(selectedSlot.index, mealSet);
       setSelectedSlot(null);
       setIsReplacing(false);
   };
@@ -152,16 +173,20 @@ const PlanPage: React.FC = () => {
             const dayName = DAYS[dayIndex];
             const lunchIndex = dayIndex * 2;
             const dinnerIndex = dayIndex * 2 + 1;
-            const lunch = plannedRecipes[lunchIndex];
-            const dinner = plannedRecipes[dinnerIndex];
+            const lunchSet = plannedRecipes[lunchIndex];
+            const dinnerSet = plannedRecipes[dinnerIndex];
 
-            // Chain Logic Check
+            // Chain Logic Check (다른 날 연결만 확인)
             // 1. Previous Dinner -> Today Lunch
-            let prevDinner = dayIndex > 0 ? plannedRecipes[(dayIndex-1)*2 + 1] : null;
-            let chainToLunch = prevDinner && lunch ? getSharedIngredients(prevDinner, lunch) : [];
+            const prevDinnerSet = dayIndex > 0 ? plannedRecipes[(dayIndex-1)*2 + 1] : null;
+            const chainToLunch = prevDinnerSet?.main && lunchSet?.main 
+              ? getSharedIngredients(prevDinnerSet.main, lunchSet.main) 
+              : [];
 
-            // 2. Today Lunch -> Today Dinner
-            let chainToDinner = lunch && dinner ? getSharedIngredients(lunch, dinner) : [];
+            // 2. Today Lunch -> Today Dinner (하루 내 연결은 표시하지 않음 - 요구사항 반영)
+            // const chainToDinner = lunchSet?.main && dinnerSet?.main 
+            //   ? getSharedIngredients(lunchSet.main, dinnerSet.main) 
+            //   : [];
 
             return (
                 <div key={dayName} className="relative pl-8 border-l-2 border-gray-200 last:border-0 pb-8">
@@ -182,28 +207,19 @@ const PlanPage: React.FC = () => {
                         )}
                         <MealCard 
                             type="점심" 
-                            recipe={lunch} 
-                            onClick={() => lunch && handleRecipeClick(lunch, lunchIndex)}
+                            mealSet={lunchSet} 
+                            onClickMain={() => lunchSet?.main && handleRecipeClick(lunchSet, lunchIndex, true)}
+                            onClickSide={() => lunchSet?.side && handleRecipeClick(lunchSet, lunchIndex, false)}
                         />
                     </div>
-
-                    {/* Connection Line Visual (Lunch -> Dinner) */}
-                    {chainToDinner.length > 0 && (
-                        <div className="h-6 w-full flex items-center justify-center relative">
-                             <div className="h-full w-0.5 bg-green-300 absolute left-8 top-0"></div>
-                             <div className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 z-10 flex items-center">
-                                <LinkIcon size={10} className="mr-1"/>
-                                {chainToDinner.join(', ')}
-                            </div>
-                        </div>
-                    )}
 
                     {/* Dinner Slot */}
                     <div className="mt-2">
                         <MealCard 
                             type="저녁" 
-                            recipe={dinner} 
-                            onClick={() => dinner && handleRecipeClick(dinner, dinnerIndex)}
+                            mealSet={dinnerSet} 
+                            onClickMain={() => dinnerSet?.main && handleRecipeClick(dinnerSet, dinnerIndex, true)}
+                            onClickSide={() => dinnerSet?.side && handleRecipeClick(dinnerSet, dinnerIndex, false)}
                         />
                     </div>
                 </div>
@@ -220,17 +236,27 @@ const PlanPage: React.FC = () => {
                     <>
                         <div className="flex justify-between items-start mb-4">
                             <div className="flex-1">
-                                <h2 className="text-xl font-bold mb-1">{selectedSlot.recipe.name}</h2>
-                                <div className="flex items-center gap-3 text-xs text-gray-500">
-                                    <div className="flex items-center gap-1">
-                                        <Clock size={12} />
-                                        <span>{selectedSlot.recipe.time}</span>
+                                <h2 className="text-xl font-bold mb-1">
+                                    {selectedSlot.isMain 
+                                      ? selectedSlot.mealSet.main?.name || '메인 없음'
+                                      : selectedSlot.mealSet.side?.name || '반찬 없음'}
+                                </h2>
+                                {(() => {
+                                  const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                                  if (!currentRecipe) return null;
+                                  return (
+                                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                                        <div className="flex items-center gap-1">
+                                            <Clock size={12} />
+                                            <span>{currentRecipe.time}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <Flame size={12} />
+                                            <span>{currentRecipe.calories} kcal</span>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-1">
-                                        <Flame size={12} />
-                                        <span>{selectedSlot.recipe.calories} kcal</span>
-                                    </div>
-                                </div>
+                                  );
+                                })()}
                             </div>
                             <button onClick={() => setSelectedSlot(null)} className="p-1 bg-gray-100 rounded-full hover:bg-gray-200">
                                 <X size={18} />
@@ -239,7 +265,9 @@ const PlanPage: React.FC = () => {
 
                         {/* 재료 준비 상태 */}
                         {(() => {
-                            const readiness = getRecipeReadiness(selectedSlot.recipe);
+                            const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                            if (!currentRecipe) return null;
+                            const readiness = getRecipeReadiness(currentRecipe);
                             return (
                                 <div className={`p-4 rounded-xl border mb-4 ${
                                     readiness.ready 
@@ -333,17 +361,21 @@ const PlanPage: React.FC = () => {
                         })()}
 
                         {/* 태그 */}
-                        {selectedSlot.recipe.tags.length > 0 && (
+                        {(() => {
+                          const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                          if (!currentRecipe || currentRecipe.tags.length === 0) return null;
+                          return (
                             <div className="mb-4">
                                 <div className="flex flex-wrap gap-1.5">
-                                    {selectedSlot.recipe.tags.map(tag => (
+                                    {currentRecipe.tags.map(tag => (
                                         <span key={tag} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
                                             {tag}
                                         </span>
                                     ))}
                                 </div>
                             </div>
-                        )}
+                          );
+                        })()}
 
                         <div className="flex gap-3">
                             <button 
@@ -420,28 +452,63 @@ const PlanPage: React.FC = () => {
   );
 };
 
-const MealCard: React.FC<{ type: string, recipe: Recipe | null, onClick: () => void }> = ({ type, recipe, onClick }) => {
-    if (!recipe) return (
-        <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl text-center text-gray-400 text-sm">
-            {type} 메뉴 없음
-        </div>
-    );
+const MealCard: React.FC<{ 
+  type: string, 
+  mealSet: MealSet | null, 
+  onClickMain: () => void,
+  onClickSide: () => void
+}> = ({ type, mealSet, onClickMain, onClickSide }) => {
+    if (!mealSet || (!mealSet.main && !mealSet.side)) {
+        return (
+            <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl text-center text-gray-400 text-sm">
+                {type} 메뉴 없음
+            </div>
+        );
+    }
 
     return (
-        <div onClick={onClick} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-98 transition-transform cursor-pointer relative z-10">
-            <img 
-              src={`/images/recipes/${recipe.id}.jpg`} 
-              alt={recipe.name} 
-              className="w-12 h-12 rounded-lg object-cover bg-gray-200"
-              onError={(e) => {
-                // 이미지 로드 실패 시 플레이스홀더로 대체
-                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${recipe.id}/100/100`;
-              }}
-            />
-            <div>
-                <span className="text-xs text-gray-400 font-medium block">{type}</span>
-                <span className="font-bold text-gray-800">{recipe.name}</span>
-            </div>
+        <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 space-y-2 relative z-10">
+            {/* 메인음식 */}
+            {mealSet.main && (
+                <div 
+                    onClick={onClickMain} 
+                    className="flex items-center gap-3 active:scale-98 transition-transform cursor-pointer"
+                >
+                    <img 
+                      src={`/images/recipes/${mealSet.main.id}.jpg`} 
+                      alt={mealSet.main.name} 
+                      className="w-12 h-12 rounded-lg object-cover bg-gray-200"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${mealSet.main!.id}/100/100`;
+                      }}
+                    />
+                    <div className="flex-1">
+                        <span className="text-xs text-gray-400 font-medium block">{type} 메인</span>
+                        <span className="font-bold text-gray-800">{mealSet.main.name}</span>
+                    </div>
+                </div>
+            )}
+            
+            {/* 반찬 */}
+            {mealSet.side && (
+                <div 
+                    onClick={onClickSide} 
+                    className="flex items-center gap-3 active:scale-98 transition-transform cursor-pointer border-t border-gray-100 pt-2"
+                >
+                    <img 
+                      src={`/images/recipes/${mealSet.side.id}.jpg`} 
+                      alt={mealSet.side.name} 
+                      className="w-10 h-10 rounded-lg object-cover bg-gray-200"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${mealSet.side!.id}/100/100`;
+                      }}
+                    />
+                    <div className="flex-1">
+                        <span className="text-xs text-gray-400 font-medium block">반찬</span>
+                        <span className="font-semibold text-sm text-gray-700">{mealSet.side.name}</span>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

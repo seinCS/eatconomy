@@ -19,12 +19,22 @@ export interface Recipe {
   calories: number;
   image?: string;
   reason?: string; // AI generated reason
+  dishType?: 'main' | 'side'; // 메인음식 또는 반찬
+  mealType?: 'lunch' | 'dinner' | 'both'; // 점심/저녁 적합성
 }
 
 export interface MealSlot {
   day: string; // "Mon", "Tue", etc.
   type: 'Lunch' | 'Dinner';
   recipeId: number | null;
+}
+
+/**
+ * 식단 슬롯: 메인음식 + 반찬 세트
+ */
+export interface MealSet {
+  main: Recipe | null;
+  side: Recipe | null;
 }
 
 export type SwipeDirection = 'left' | 'right';
