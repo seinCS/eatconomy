@@ -1,8 +1,9 @@
 # 잇코노미(Eat-conomy) MVP 기술 명세서 및 개발 완료 보고서
 
 **작성일**: 2024년 12월  
-**버전**: MVP v1.0  
-**프로젝트 타입**: React SPA (Single Page Application)
+**버전**: v1.2.0  
+**프로젝트 타입**: React SPA (Single Page Application)  
+**최종 업데이트**: 2024년 12월 10일
 
 ---
 
@@ -75,7 +76,7 @@ eat-conomy/
 | `fridge` | `string[]` | 냉장고 재료 목록 | localStorage (`eat_conomy_db_v1`) |
 | `likedRecipes` | `Recipe[]` | 스와이프로 선택한 좋아하는 레시피 | localStorage (`eat_conomy_db_v1`) |
 | `dislikedRecipes` | `Recipe[]` | 스와이프로 선택한 싫어하는 레시피 | localStorage (`eat_conomy_db_v1`) |
-| `plannedRecipes` | `(Recipe \| null)[]` | 주간 식단표 (14개 슬롯) | localStorage (`eat_conomy_db_v1`) |
+| `plannedRecipes` | `MealSet[]` | 주간 식단표 (14개 세트: 메인+반찬) | localStorage (`eat_conomy_db_v1`) |
 | `shoppingListChecks` | `Record<string, boolean>` | 장보기 목록 체크 상태 | localStorage (`eat_conomy_db_v1`) |
 | `todayMealFinished` | `boolean` | 오늘 식사 완료 상태 (Legacy) | localStorage (`eat_conomy_db_v1`) |
 | `mealFinished` | `Record<string, Record<string, boolean>>` | 날짜별 식사 완료 상태 | localStorage (`eat_conomy_db_v1`) |
@@ -99,50 +100,73 @@ eat-conomy/
 #### 2.1.1 선택(Selection) 로직
 
 **파일 위치**: `services/recipeService.ts`  
-**함수명**: `generateScoredWeeklyPlan()`
+**함수명**: `generateScoredWeeklyPlan()`  
+**반환 타입**: `MealSet[]` (14개 세트: 점심/저녁 × 7일)
 
 **처리 흐름**:
 
-1. **전처리 필터링 (Hard Filter)**
+1. **레시피 메타데이터 자동 분류**
    ```typescript
-   // Line 174-182: services/recipeService.ts
+   // Line 8-55: services/recipeService.ts
+   ```
+   - `enrichRecipeMetadata()`: 레시피에 `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 추가
+   - 태그와 칼로리 기반으로 자동 분류
+   - `ENRICHED_RECIPES`: 메타데이터가 추가된 레시피 목록
+
+2. **전처리 필터링 (Hard Filter)**
+   ```typescript
+   // Line 231-239: services/recipeService.ts
    ```
    - 알러지 재료 포함 레시피 제외 (`preferences.allergies`)
    - 싫어하는 재료 포함 레시피 제외 (`preferences.dislikedFoods`)
    - 스와이프로 싫어요 선택한 레시피 제외 (`dislikedRecipes`)
 
-2. **점수 산정 (Scoring)**
+3. **점수 산정 (Scoring)**
    ```typescript
-   // Line 184-209: services/recipeService.ts
+   // Line 241-266: services/recipeService.ts
    ```
    - **재료 매칭 점수**: `(냉장고 재료 매칭 수 / 전체 재료 수) * 100`
    - **부족 재료 페널티**: `부족한 재료 수 * 10`
    - **맵기 페널티**: 사용자가 순한맛(1)이고 레시피가 매운 경우 `-50`
    - **좋아요 보너스**: 스와이프로 선택한 레시피 `+1000` (최우선 선택)
 
-3. **다양성 로직 (Diversity Logic)**
+4. **메인/반찬 분리**
    ```typescript
-   // Line 217-270: services/recipeService.ts
+   // Line 274-276: services/recipeService.ts
    ```
-   - 상위 30개 후보 풀에서 선택
-   - 태그 중복 제한: `#면`, `#고기`, `#국물`, `#분식`, `#빵`, `#튀김` 각각 최대 3회
-   - 상위 5개 후보 중 랜덤 선택 (가중치 셔플)
-   - 중복 레시피 방지
+   - 메인음식과 반찬을 별도 풀로 분리
+   - 각 식사에 메인+반찬 세트 구성
 
-4. **폴백 메커니즘**
+5. **슬롯별 레시피 선택 (개선된 알고리즘)**
    ```typescript
-   // Line 272-280: services/recipeService.ts
+   // Line 359-452: services/recipeService.ts - selectRecipeForSlot()
    ```
-   - 안전한 풀(알러지 제외)에서 랜덤 선택
-   - 최후의 수단: 전체 레시피 DB에서 랜덤
+   - **하루 내 재료 반복 패널티**: 같은 날 이미 사용된 재료와 겹치면 `-30점/재료`
+   - **다른 날 재료 연결 보너스**: 이전 날 저녁과 재료가 겹치면 `+20점/재료`
+   - **점심/저녁 적합성**: 
+     - 점심: 가벼운 요리 우선 (칼로리 < 400 → +30점)
+     - 저녁: 든든한 요리 우선 (칼로리 > 500 → +30점)
+   - **mealType 매칭 보너스**: 정확히 맞는 타입이면 `+50점`
+   - 상위 5개 후보 중 랜덤 선택 (다양성 확보)
+
+6. **7일 식단 생성 (메인+반찬 세트)**
+   ```typescript
+   // Line 278-356: services/recipeService.ts
+   ```
+   - 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
+   - 날짜별 사용된 재료 추적 (`usedIngredientsByDay`)
+   - 중복 레시피 방지 (`usedRecipeIds`)
+   - 총 14개 MealSet 반환 (점심/저녁 × 7일)
 
 #### 2.1.2 알러지/비선호 필터링 단계
 
 **필터링 순서**:
-1. **1차 필터링** (Line 174-182): 알러지, 싫어하는 재료, 싫어하는 레시피 제외
-2. **점수 산정** (Line 184-209): 필터링된 후보들에 점수 부여
-3. **다양성 필터링** (Line 229-241): 태그 중복 및 레시피 중복 방지
-4. **폴백 처리** (Line 252-260): 필터링 후 후보가 없을 경우 안전한 풀 사용
+1. **레시피 메타데이터 자동 분류** (Line 8-55): dishType, mealType 자동 추가
+2. **1차 필터링** (Line 231-239): 알러지, 싫어하는 재료, 싫어하는 레시피 제외
+3. **점수 산정** (Line 241-266): 필터링된 후보들에 점수 부여
+4. **메인/반찬 분리** (Line 274-276): 메인음식과 반찬 풀 분리
+5. **슬롯별 선택** (Line 359-452): 개선된 알고리즘으로 각 슬롯에 맞는 레시피 선택
+6. **폴백 처리**: 필터링 후 후보가 없을 경우 안전한 풀 사용
 
 **안전성 보장**:
 - 알러지는 **절대 제외** (Hard Filter)
@@ -151,9 +175,9 @@ eat-conomy/
 
 #### 2.1.3 점수 산정 방식 상세
 
-**점수 공식**:
+**기본 점수 공식**:
 ```
-총점 = 재료매칭점수 - 부족재료페널티 - 맵기페널티 + 좋아요보너스
+기본점수 = 재료매칭점수 - 부족재료페널티 - 맵기페널티 + 좋아요보너스
 
 재료매칭점수 = (냉장고에 있는 재료 수 / 전체 재료 수) * 100
 부족재료페널티 = 부족한 재료 수 * 10
@@ -161,10 +185,24 @@ eat-conomy/
 좋아요보너스 = 스와이프로 선택한 레시피인 경우 1000점
 ```
 
+**슬롯별 최종 점수 (개선된 알고리즘)**:
+```
+최종점수 = 기본점수 - 하루내재료반복패널티 + 다른날재료연결보너스 + 점심저녁적합성보너스
+
+하루내재료반복패널티 = 같은 날 사용된 재료와 겹치는 재료 수 * 30점
+다른날재료연결보너스 = 이전 날 저녁과 겹치는 재료 수 * 20점
+점심저녁적합성보너스:
+  - mealType 정확히 매칭: +50점
+  - 점심이고 칼로리 < 400: +30점
+  - 저녁이고 칼로리 > 500: +30점
+```
+
 **예시**:
-- 레시피 A: 재료 5개 중 3개 보유 → 매칭점수 60, 부족 2개 → 페널티 20 → **총점 40**
-- 레시피 B: 재료 3개 중 3개 보유 → 매칭점수 100, 부족 0개 → **총점 100**
-- 레시피 C: 좋아요 선택 + 재료 4개 중 2개 보유 → 매칭점수 50, 부족 2개 → 페널티 20, 보너스 1000 → **총점 1030**
+- 레시피 A: 재료 5개 중 3개 보유 → 매칭점수 60, 부족 2개 → 페널티 20 → **기본점수 40**
+- 레시피 B: 재료 3개 중 3개 보유 → 매칭점수 100, 부족 0개 → **기본점수 100**
+- 레시피 C: 좋아요 선택 + 재료 4개 중 2개 보유 → 매칭점수 50, 부족 2개 → 페널티 20, 보너스 1000 → **기본점수 1030**
+- 레시피 D: 기본점수 80, 같은 날 재료 2개 겹침 → 패널티 60 → **최종점수 20**
+- 레시피 E: 기본점수 80, 이전 날 재료 2개 연결 → 보너스 40, 점심 적합 +30 → **최종점수 150**
 
 ### 2.2 데이터 영속성 (Persistence)
 
@@ -179,7 +217,8 @@ eat-conomy/
 interface DBState {
   users: Record<string, User>;
   fridgeItems: Record<string, string[]>;              // userId -> 재료 목록
-  weeklyPlans: Record<string, (Recipe | null)[]>;    // userId -> 14개 슬롯
+  weeklyPlans: Record<string, (Recipe | null)[]>;    // userId -> 14개 슬롯 (레거시: 메인만 저장)
+  // TODO: 백엔드 API 업데이트 시 MealSet[] 구조로 변경 필요
   likedRecipes: Record<string, number[]>;            // userId -> 레시피 ID 배열
   dislikedRecipes: Record<string, number[]>;          // userId -> 레시피 ID 배열
   shoppingChecks: Record<string, Record<string, boolean>>; // userId -> { 재료명: 체크여부 }
@@ -187,6 +226,8 @@ interface DBState {
   mealFinished: Record<string, Record<string, boolean>>; // userId -> { "2024-12-08-lunch": true }
 }
 ```
+
+**참고**: 현재 백엔드 API는 레거시 구조를 지원하므로 프론트엔드에서 MealSet[]를 Recipe[]로 변환하여 저장합니다.
 
 #### 2.2.2 저장 시점
 
@@ -268,9 +309,17 @@ interface Recipe {
   calories: number;               // 칼로리
   image?: string;                 // 이미지 URL (옵셔널, 현재 미사용)
   reason?: string;                // AI 생성 이유 (식단 생성 시 추가)
+  dishType?: 'main' | 'side';    // 메인음식 또는 반찬 (자동 분류)
+  mealType?: 'lunch' | 'dinner' | 'both'; // 점심/저녁 적합성 (자동 분류)
 }
 
-// 식사 슬롯 (현재 미사용, 향후 확장용)
+// 식사 슬롯: 메인음식 + 반찬 세트
+interface MealSet {
+  main: Recipe | null;            // 메인음식
+  side: Recipe | null;             // 반찬
+}
+
+// 식사 슬롯 (레거시, 현재 미사용)
 interface MealSlot {
   day: string;                    // "Mon", "Tue" 등
   type: 'Lunch' | 'Dinner';
@@ -376,7 +425,7 @@ interface User {
 | 재료 검색 | ✅ 완료 | `pages/Fridge.tsx:52-58` | 실시간 필터링 |
 | 카테고리 분류 | ✅ 완료 | `pages/Fridge.tsx:59-72` | 6개 카테고리 |
 | 재료 준비 상태 표시 | ✅ 완료 | `pages/Home.tsx:79-84` | 홈 페이지에서 표시 |
-| 식단 추천 받기 | ✅ 완료 | `pages/Fridge.tsx:13-24` | `generateAIPlan()` 호출 |
+| ~~식단 추천 받기~~ | ❌ 제거됨 | - | 사용률 낮아 제거 (v1.2.0) |
 
 **제약사항**:
 - 재료 수량 관리 없음 (있음/없음만)
@@ -387,14 +436,14 @@ interface User {
 | 기능 | 상태 | 구현 위치 | 비고 |
 |------|------|-----------|------|
 | 스와이프 선호도 조사 | ✅ 완료 | `pages/Swipe.tsx` | 10개 레시피 스와이프 |
-| AI 식단 생성 (Scored) | ✅ 완료 | `services/recipeService.ts:150-287` | 점수 기반 알고리즘 |
+| AI 식단 생성 (Scored) | ✅ 완료 | `services/recipeService.ts:206-357` | 메인+반찬 세트 알고리즘 (v1.2.0) |
 | AI 식단 생성 (LLM) | ⚠️ 부분완료 | `services/geminiService.ts:53-190` | 구현됐으나 현재 미사용 |
-| 식단표 표시 | ✅ 완료 | `pages/Plan.tsx` | 주간 타임라인 뷰 |
-| 레시피 상세 보기 | ✅ 완료 | `pages/Plan.tsx:56-62` | 모달 형태 |
+| 식단표 표시 | ✅ 완료 | `pages/Plan.tsx` | 주간 타임라인 뷰 (메인+반찬 표시) |
+| 레시피 상세 보기 | ✅ 완료 | `pages/Plan.tsx:54-126` | 모달 형태 (메인/반찬 구분) |
 | AI 레시피 팁 | ✅ 완료 | `services/geminiService.ts:15-45` | Gemini API 연동 |
-| 메뉴 교체 | ✅ 완료 | `pages/Plan.tsx:64-91` | Chain Cooking 기반 추천 |
-| Chain Cooking 시각화 | ✅ 완료 | `pages/Plan.tsx:144-185` | 재료 연계 표시 |
-| 실시간 대시보드 | ✅ 완료 | `pages/Plan.tsx:26-54` | 절약액, 칼로리, 체인 카운트 |
+| 메뉴 교체 | ✅ 완료 | `pages/Plan.tsx:78-126` | Chain Cooking 기반 추천 |
+| Chain Cooking 시각화 | ✅ 완료 | `pages/Plan.tsx:170-233` | 다른 날 재료 연계 표시 (v1.2.0) |
+| 실시간 대시보드 | ✅ 완료 | `pages/Plan.tsx:23-52` | 절약액, 칼로리, 체인 카운트 |
 
 **제약사항**:
 - LLM 기반 식단 생성은 구현되어 있으나 비용 절감을 위해 미사용
@@ -417,10 +466,11 @@ interface User {
 
 | 기능 | 상태 | 구현 위치 | 비고 |
 |------|------|-----------|------|
-| 오늘의 식단 표시 | ✅ 완료 | `pages/Home.tsx:30-50` | 점심/저녁 모두 표시 |
-| 식사 완료 체크 | ✅ 완료 | `pages/Home.tsx:74-93` | 개별 완료 체크 |
-| 재료 준비 상태 | ✅ 완료 | `pages/Home.tsx:79-84` | 냉장고 기반 확인 |
-| 절약액 통계 | ✅ 완료 | `pages/Home.tsx:129-151` | 가상 데이터 (차트) |
+| 오늘의 식단 표시 | ✅ 완료 | `pages/Home.tsx:26-46` | 메인+반찬 모두 표시 (v1.2.0) |
+| 식사 완료 체크 | ✅ 완료 | `pages/Home.tsx:69-88` | 개별 완료 체크 |
+| 재료 준비 상태 | ✅ 완료 | `pages/Home.tsx:96-100` | 냉장고 기반 확인 |
+| 절약액 통계 | ✅ 완료 | `pages/Home.tsx:264-289` | 가상 데이터 (차트) |
+| 이번주 식단 다시 추천받기 | ✅ 완료 | `pages/Home.tsx:292-302` | resetSession 후 /swipe 이동 (v1.2.0) |
 
 **제약사항**:
 - 절약액은 가상 시뮬레이션 데이터 (실제 계산 로직 없음)
@@ -515,10 +565,13 @@ interface User {
    - 사용자 커스텀 레시피 추가 불가
    - 레시피 상세 정보 부족 (조리 방법, 단계별 설명 없음)
 
-2. **식단 생성 알고리즘 한계**
-   - 냉장고 재료 기반만 고려 (재료 구매 비용 미고려)
-   - 영양소 균형 고려 없음
-   - 식사 시간대별 최적화 없음 (아침/점심/저녁 구분 없음)
+2. **식단 생성 알고리즘 개선사항 (v1.2.0)**
+   - ✅ 메인+반찬 세트 구성으로 현실적인 식단 제공
+   - ✅ 하루 내 재료 반복 최소화
+   - ✅ 다른 날 재료 연결 우선시
+   - ✅ 점심/저녁 적합성 고려
+   - ⚠️ 재료 구매 비용 미고려
+   - ⚠️ 영양소 균형 고려 없음
 
 3. **장보기 목록 기능 제한**
    - 쿠팡 링크만 제공 (다른 쇼핑몰 연동 없음)
@@ -577,23 +630,31 @@ interface User {
 ### 6.2 식단 생성 플로우
 
 ```
-[사용자: 냉장고 페이지에서 "식단 추천받기" 클릭]
+[사용자: 홈 화면에서 "이번주 식단 다시 추천받기" 클릭]
     ↓
-[Fridge.tsx: handleStartPlanning()]
+[Home.tsx: handleStartPlanning()]
     ↓
-[App.tsx: generateAIPlan()]
+[App.tsx: resetSession()] - 선호도 초기화
+    ↓
+[Home.tsx: navigate('/swipe')] - 스와이프 페이지로 이동
+    ↓
+[사용자: 스와이프로 선호도 조사 완료]
+    ↓
+[Swipe.tsx: finishSwiping()]
     ↓
 [App.tsx: generatePlan()]
     ↓
 [recipeService.ts: generateScoredWeeklyPlan()]
+    ├─→ [레시피 메타데이터 자동 분류: dishType, mealType]
     ├─→ [필터링: 알러지/비선호 제외]
     ├─→ [점수 산정: 재료 매칭 + 보너스]
-    ├─→ [다양성 로직: 태그 중복 방지]
-    └─→ [선택: 상위 14개 레시피]
+    ├─→ [메인/반찬 분리]
+    ├─→ [슬롯별 선택: 하루 내 반복 패널티, 다른 날 연결 보너스]
+    └─→ [선택: 14개 MealSet (메인+반찬 × 7일)]
     ↓
-[dbService.ts: savePlan()]
+[App.tsx: setPlannedRecipes(mealSets)]
     ↓
-[localStorage 저장]
+[apiService.ts: savePlan()] - 백엔드 저장 (메인만, 레거시 호환)
     ↓
 [UI 업데이트: Plan 페이지로 이동]
 ```
@@ -664,5 +725,49 @@ npm run test:ui
 ---
 
 **문서 작성 완료일**: 2024년 12월  
+**최종 업데이트**: 2024년 12월 10일 (v1.2.0)  
 **최종 검토 필요 항목**: 실제 프로덕션 배포 전 보안 검토 및 성능 테스트 권장
+
+---
+
+## 9. v1.2.0 주요 변경사항 요약
+
+### 9.1 식단 추천 시스템 고도화
+
+- **메인+반찬 세트 구성**: 각 식사에 메인음식 1개와 반찬 1개가 함께 추천됩니다
+- **레시피 메타데이터 자동 분류**: `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 추가
+- **개선된 알고리즘**:
+  - 하루 내 재료 반복 패널티: 같은 날 재료 중복 사용 시 -30점/재료
+  - 다른 날 재료 연결 보너스: 이전 날 저녁과 재료 연결 시 +20점/재료
+  - 점심/저녁 적합성: 점심은 가벼운 요리, 저녁은 든든한 요리 우선 추천
+
+### 9.2 타입 시스템 개선
+
+- `MealSet` 타입 추가: `{ main: Recipe | null, side: Recipe | null }`
+- `Recipe` 타입 확장: `dishType`, `mealType` 속성 추가
+- `plannedRecipes` 타입 변경: `(Recipe | null)[]` → `MealSet[]`
+
+### 9.3 UI/UX 개선
+
+- **홈 화면**: "이번주 식단 다시 추천받기" 버튼 추가
+- **홈 화면 오늘의 식단**: 메인음식과 반찬 모두 표시
+- **냉장고 페이지**: 사용률 낮은 "이 재료로 추천받기" 버튼 제거
+
+### 9.4 알고리즘 상세
+
+**슬롯별 레시피 선택 로직** (`selectRecipeForSlot`):
+1. 사용되지 않은 레시피 필터링
+2. 점심/저녁 적합성 필터링
+3. 점수 계산:
+   - 기본 점수 (재료 매칭, 부족 페널티, 맵기 페널티, 좋아요 보너스)
+   - 하루 내 재료 반복 패널티 (-30점/재료)
+   - 다른 날 재료 연결 보너스 (+20점/재료)
+   - 점심/저녁 적합성 보너스 (+30~50점)
+4. 상위 5개 후보 중 랜덤 선택
+
+**7일 식단 생성 프로세스**:
+- 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
+- 날짜별 사용된 재료 추적 (`usedIngredientsByDay`)
+- 중복 레시피 방지 (`usedRecipeIds`)
+- 총 14개 MealSet 반환 (점심/저녁 × 7일)
 
