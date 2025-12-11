@@ -280,19 +280,39 @@ const App: React.FC = () => {
     }
   };
 
-  // Local/Hybrid generation (Using Scored Logic)
-  const generatePlan = async () => {
+  // LLM-based generation with fallback to scored algorithm
+  const generatePlan = async (useLLM: boolean = true) => {
     if (!user) return;
     try {
-        // Use the advanced scoring algorithm that respects preferences and fridge
-        const mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
-        
-        setPlannedRecipes(mealSets);
-        
-        // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
-        // TODO: 백엔드 API를 MealSet[] 구조로 업데이트 필요
-        const mainRecipes = mealSets.map(ms => ms.main);
-        await apiService.savePlan(user.id, mainRecipes);
+      let mealSets: MealSet[];
+      
+      if (useLLM) {
+        try {
+          // Try LLM-based generation first
+          const { generateWeeklyPlanWithLLM } = await import('./services/openaiService');
+          mealSets = await generateWeeklyPlanWithLLM(
+            fridge,
+            preferences,
+            dislikedRecipes,
+            likedRecipes
+          );
+          console.log('[generatePlan] LLM-based plan generated successfully');
+        } catch (llmError) {
+          console.warn('[generatePlan] LLM generation failed, falling back to scored algorithm:', llmError);
+          // Fallback to scored algorithm if LLM fails
+          mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+        }
+      } else {
+        // Use scored algorithm directly
+        mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+      }
+      
+      setPlannedRecipes(mealSets);
+      
+      // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
+      // TODO: 백엔드 API를 MealSet[] 구조로 업데이트 필요
+      const mainRecipes = mealSets.map(ms => ms.main);
+      await apiService.savePlan(user.id, mainRecipes);
     } catch (e) {
         const { logError } = await import('./utils/errors');
         logError(e, 'generatePlan');
@@ -300,7 +320,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Explicit AI/Scored Generation Trigger (e.g. from Fridge Page)
+  // Explicit AI/LLM Generation Trigger (e.g. from Fridge Page or Home)
   const generateAIPlan = async () => {
     if (!user) return;
     setIsGeneratingPlan(true);
@@ -309,8 +329,8 @@ const App: React.FC = () => {
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     try {
-      // Re-use the same scoring logic
-      await generatePlan();
+      // Use LLM-based generation (with automatic fallback)
+      await generatePlan(true);
     } catch (error) {
       const { logError } = await import('./utils/errors');
       logError(error, 'generateAIPlan');

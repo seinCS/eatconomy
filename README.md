@@ -38,7 +38,10 @@ npm install
 cd ..
 
 # 환경 변수 설정
-# ENV_SETUP.md 및 backend/DATABASE_SETUP.md 참고
+# 루트 디렉토리에 .env 파일 생성 (또는 .env.example 참고)
+# 필수: VITE_OPENAI_API_KEY (LLM 기반 식단 추천용)
+# 선택: VITE_GEMINI_API_KEY (레시피 팁용)
+# 자세한 내용은 HANDOVER.md 참고
 
 # 프론트엔드 실행 (포트 3000)
 npm run dev
