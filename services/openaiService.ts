@@ -287,9 +287,9 @@ ${recipeDbSummary.map(r =>
   } catch (error) {
     console.error('OpenAI Plan Generation Error:', error);
     
-    // 에러 발생 시 기존 스코어링 알고리즘으로 폴백
-    console.warn('Falling back to scored algorithm due to LLM error');
-    throw error;
+    // 에러 발생 시 기존 스코어링 알고리즘으로 폴백 (LLM 테스트용 주석처리)
+    // console.warn('Falling back to scored algorithm due to LLM error');
+    throw error; // LLM만 사용하므로 에러를 그대로 전파
   }
 };
 

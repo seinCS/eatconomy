@@ -13,7 +13,8 @@ import ProfilePage from './pages/Profile';
 import AuthCallbackPage from './pages/AuthCallback';
 import ErrorBoundary from './components/ErrorBoundary';
 import { Recipe, UserPreferences, User, MealSet } from './types';
-import { getAllRecipes, generateScoredWeeklyPlan } from './services/recipeService';
+import { getAllRecipes } from './services/recipeService';
+// import { generateScoredWeeklyPlan } from './services/recipeService'; // LLM 테스트용 주석처리
 import { authService } from './services/authService';
 import { apiService } from './services/apiService';
 import { WEEKLY_PLAN_SLOTS, SWIPE_CARD_COUNT } from './constants';
@@ -280,31 +281,33 @@ const App: React.FC = () => {
     }
   };
 
-  // LLM-based generation with fallback to scored algorithm
+  // LLM-based generation only (스코어링 알고리즘 폴백 주석처리)
   const generatePlan = async (useLLM: boolean = true) => {
     if (!user) return;
     try {
       let mealSets: MealSet[];
       
       if (useLLM) {
-        try {
-          // Try LLM-based generation first
-          const { generateWeeklyPlanWithLLM } = await import('./services/openaiService');
-          mealSets = await generateWeeklyPlanWithLLM(
-            fridge,
-            preferences,
-            dislikedRecipes,
-            likedRecipes
-          );
-          console.log('[generatePlan] LLM-based plan generated successfully');
-        } catch (llmError) {
-          console.warn('[generatePlan] LLM generation failed, falling back to scored algorithm:', llmError);
-          // Fallback to scored algorithm if LLM fails
-          mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
-        }
+        // LLM-based generation only
+        const { generateWeeklyPlanWithLLM } = await import('./services/openaiService');
+        mealSets = await generateWeeklyPlanWithLLM(
+          fridge,
+          preferences,
+          dislikedRecipes,
+          likedRecipes
+        );
+        console.log('[generatePlan] LLM-based plan generated successfully');
+        
+        // 스코어링 알고리즘 폴백 주석처리 (LLM 테스트용)
+        // } catch (llmError) {
+        //   console.warn('[generatePlan] LLM generation failed, falling back to scored algorithm:', llmError);
+        //   // Fallback to scored algorithm if LLM fails
+        //   mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+        // }
       } else {
-        // Use scored algorithm directly
-        mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+        // 스코어링 알고리즘 직접 사용 (주석처리)
+        // mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
+        throw new Error('스코어링 알고리즘은 현재 비활성화되어 있습니다. LLM 모드를 사용하세요.');
       }
       
       setPlannedRecipes(mealSets);
