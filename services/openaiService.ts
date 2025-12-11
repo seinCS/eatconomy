@@ -137,7 +137,12 @@ ${recipeDbSummary.map(r =>
 출력: 14개 식사(day:0-6, mealType:lunch/dinner, mainRecipeId, sideRecipeId, reasoning)`;
 
   try {
+    console.log('[OpenAI] API 호출 시작...');
+    console.log('[OpenAI] 후보 레시피 수:', candidateRecipes.length);
+    console.log('[OpenAI] 프롬프트 길이:', systemPrompt.length, '자');
+    
     // 5. OpenAI API 호출 (structured output with JSON Schema)
+    const startTime = Date.now();
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -189,29 +194,54 @@ ${recipeDbSummary.map(r =>
       },
       temperature: 0.7,
     });
+    
+    const apiTime = Date.now() - startTime;
+    console.log('[OpenAI] API 호출 완료:', apiTime, 'ms');
+    console.log('[OpenAI] 응답 토큰 사용량:', completion.usage);
 
     // 6. 응답 파싱 및 검증
     const responseContent = completion.choices[0].message.content;
+    console.log('[OpenAI] 응답 내용 길이:', responseContent?.length || 0);
+    
     if (!responseContent || typeof responseContent !== 'string') {
+      console.error('[OpenAI] 응답 내용이 유효하지 않음:', responseContent);
       throw new Error('Invalid response content from OpenAI');
     }
+    
+    // 응답 내용 일부 로깅 (너무 길면 잘라서)
+    const previewLength = 500;
+    console.log('[OpenAI] 응답 미리보기:', 
+      responseContent.length > previewLength 
+        ? responseContent.substring(0, previewLength) + '...'
+        : responseContent
+    );
     
     let parsedResponse: { weeklyPlan: WeeklyPlanResponse['weeklyPlan'] };
     try {
       parsedResponse = JSON.parse(responseContent);
+      console.log('[OpenAI] JSON 파싱 성공');
     } catch (parseError) {
+      console.error('[OpenAI] JSON 파싱 실패:', parseError);
+      console.error('[OpenAI] 원본 응답:', responseContent);
       throw new Error(`Failed to parse OpenAI response: ${parseError}`);
     }
     
+    console.log('[OpenAI] 파싱된 식사 수:', parsedResponse?.weeklyPlan?.length || 0);
+    
     if (!parsedResponse?.weeklyPlan || parsedResponse.weeklyPlan.length !== 14) {
+      console.error('[OpenAI] 식사 수 불일치:', parsedResponse?.weeklyPlan?.length);
       throw new Error(`Invalid response format from OpenAI: expected 14 meals, got ${parsedResponse?.weeklyPlan?.length || 0}`);
     }
 
     // Zod 스키마로 검증
+    console.log('[OpenAI] Zod 스키마 검증 시작...');
     const validated = WeeklyPlanSchema.parse(parsedResponse);
+    console.log('[OpenAI] Zod 스키마 검증 완료');
 
     // 7. MealSet[] 구조로 변환 (레시피 DB의 정확한 형식 준수)
+    console.log('[OpenAI] MealSet 변환 시작...');
     const mealSets: MealSet[] = Array(14).fill(null).map(() => ({ main: null, side: null }));
+    const missingRecipeIds: number[] = [];
 
     for (const item of validated.weeklyPlan) {
       const slotIndex = item.day * 2 + (item.mealType === 'lunch' ? 0 : 1);
@@ -224,8 +254,10 @@ ${recipeDbSummary.map(r =>
           ...mainRecipe,
           reason: item.reasoning,
         };
+        console.log(`[OpenAI] 슬롯${slotIndex} 메인: ${mainRecipe.name} (ID: ${item.mainRecipeId})`);
       } else {
         console.warn(`[OpenAI] 메인 레시피 ID ${item.mainRecipeId}를 찾을 수 없습니다.`);
+        missingRecipeIds.push(item.mainRecipeId);
       }
 
       // 반찬 레시피 찾기 (ID로 정확히 매칭)
@@ -237,10 +269,18 @@ ${recipeDbSummary.map(r =>
             ...sideRecipe,
             reason: item.reasoning,
           };
+          console.log(`[OpenAI] 슬롯${slotIndex} 반찬: ${sideRecipe.name} (ID: ${item.sideRecipeId})`);
         } else {
           console.warn(`[OpenAI] 반찬 레시피 ID ${item.sideRecipeId}를 찾을 수 없습니다.`);
+          missingRecipeIds.push(item.sideRecipeId);
         }
+      } else {
+        console.log(`[OpenAI] 슬롯${slotIndex} 반찬: null (반찬 없음)`);
       }
+    }
+    
+    if (missingRecipeIds.length > 0) {
+      console.warn('[OpenAI] 찾을 수 없는 레시피 ID:', missingRecipeIds);
     }
 
     // 8. 누락된 슬롯 채우기 (폴백)

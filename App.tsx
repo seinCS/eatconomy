@@ -283,20 +283,40 @@ const App: React.FC = () => {
 
   // LLM-based generation only (스코어링 알고리즘 폴백 주석처리)
   const generatePlan = async (useLLM: boolean = true) => {
-    if (!user) return;
+    if (!user) {
+      console.warn('[generatePlan] 사용자가 로그인하지 않았습니다.');
+      return;
+    }
+    
+    // 중복 호출 방지
+    if (isGeneratingPlan) {
+      console.warn('[generatePlan] 이미 식단 생성 중입니다. 중복 호출 무시.');
+      return;
+    }
+    
+    setIsGeneratingPlan(true);
+    
     try {
+      console.log('[generatePlan] 시작 - 사용자:', user.id, '냉장고:', fridge.length, '개');
+      console.log('[generatePlan] 좋아요 레시피:', likedRecipes.length, '개');
+      console.log('[generatePlan] 싫어요 레시피:', dislikedRecipes.length, '개');
+      
       let mealSets: MealSet[];
       
       if (useLLM) {
         // LLM-based generation only
         const { generateWeeklyPlanWithLLM } = await import('./services/openaiService');
+        console.log('[generatePlan] LLM 기반 식단 생성 시작...');
         mealSets = await generateWeeklyPlanWithLLM(
           fridge,
           preferences,
           dislikedRecipes,
           likedRecipes
         );
-        console.log('[generatePlan] LLM-based plan generated successfully');
+        console.log('[generatePlan] LLM 기반 식단 생성 완료:', mealSets.length, '개 세트');
+        console.log('[generatePlan] 생성된 식단:', mealSets.map((ms, idx) => 
+          `슬롯${idx}: 메인=${ms.main?.name || 'null'}, 반찬=${ms.side?.name || 'null'}`
+        ));
         
         // 스코어링 알고리즘 폴백 주석처리 (LLM 테스트용)
         // } catch (llmError) {
@@ -311,15 +331,22 @@ const App: React.FC = () => {
       }
       
       setPlannedRecipes(mealSets);
+      console.log('[generatePlan] 상태 업데이트 완료');
       
       // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
       // TODO: 백엔드 API를 MealSet[] 구조로 업데이트 필요
       const mainRecipes = mealSets.map(ms => ms.main);
+      console.log('[generatePlan] 백엔드 저장 시작...');
       await apiService.savePlan(user.id, mainRecipes);
+      console.log('[generatePlan] 백엔드 저장 완료');
     } catch (e) {
+        console.error('[generatePlan] 에러 발생:', e);
         const { logError } = await import('./utils/errors');
         logError(e, 'generatePlan');
         throw e; // Propagate error for UI handling
+    } finally {
+      setIsGeneratingPlan(false);
+      console.log('[generatePlan] 완료 (로딩 상태 해제)');
     }
   };
 

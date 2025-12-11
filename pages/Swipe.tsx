@@ -10,10 +10,11 @@ import { AnimatePresence } from 'framer-motion';
 import { SWIPE_CARD_COUNT } from '../constants';
 
 const SwipePage: React.FC = () => {
-  const { addLikedRecipe, addDislikedRecipe, generatePlan, preferences } = useApp();
+  const { addLikedRecipe, addDislikedRecipe, generatePlan, preferences, isGeneratingPlan } = useApp();
   const navigate = useNavigate();
   const [cards, setCards] = useState<Recipe[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0); 
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false); 
 
   useEffect(() => {
     // Load recipes and shuffle
@@ -47,8 +48,24 @@ const SwipePage: React.FC = () => {
   };
 
   const finishSwiping = async () => {
-    await generatePlan(); // Trigger logic update based on likes and dislikes
-    navigate('/plan');
+    // 중복 호출 방지
+    if (isGenerating || isGeneratingPlan) {
+      console.warn('[Swipe] 이미 식단 생성 중입니다.');
+      return;
+    }
+    
+    setIsGenerating(true);
+    try {
+      console.log('[Swipe] 식단 생성 시작...');
+      await generatePlan(); // Trigger logic update based on likes and dislikes
+      console.log('[Swipe] 식단 생성 완료, Plan 페이지로 이동');
+      navigate('/plan');
+    } catch (error) {
+      console.error('[Swipe] 식단 생성 실패:', error);
+      alert('식단 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const isFinished = currentIndex >= cards.length;
@@ -75,9 +92,14 @@ const SwipePage: React.FC = () => {
         <p className="text-gray-500 mb-8">선택하신 취향을 반영해<br/>일주일 식단을 구성했습니다.</p>
         <button 
           onClick={finishSwiping}
-          className="w-full max-w-xs bg-orange-500 text-white py-4 rounded-xl font-bold shadow-lg hover:bg-orange-600 transition active:scale-95"
+          disabled={isGenerating || isGeneratingPlan}
+          className={`w-full max-w-xs py-4 rounded-xl font-bold shadow-lg transition active:scale-95 ${
+            isGenerating || isGeneratingPlan
+              ? 'bg-gray-400 text-white cursor-not-allowed'
+              : 'bg-orange-500 text-white hover:bg-orange-600'
+          }`}
         >
-          식단표 확인하러 가기
+          {isGenerating || isGeneratingPlan ? '식단 생성 중...' : '식단표 확인하러 가기'}
         </button>
       </div>
     );
