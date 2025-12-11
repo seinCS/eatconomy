@@ -11,6 +11,7 @@ import FridgePage from './pages/Fridge';
 import LoginPage from './pages/Login';
 import ProfilePage from './pages/Profile';
 import AuthCallbackPage from './pages/AuthCallback';
+import OnboardingPage from './pages/Onboarding';
 import ErrorBoundary from './components/ErrorBoundary';
 import { Recipe, UserPreferences, User, MealSet } from './types';
 import { getAllRecipes } from './services/recipeService';
@@ -62,11 +63,11 @@ export const useApp = () => {
 
 // --- Protected Route Component ---
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, isCheckingAuth } = useApp();
+  const { user, isCheckingAuth, preferences, isLoadingData } = useApp();
   const routeLocation = useLocation();
 
   // 인증 확인 중이면 로딩 표시
-  if (isCheckingAuth) {
+  if (isCheckingAuth || isLoadingData) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -80,6 +81,41 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   // 인증 확인이 완료되었지만 사용자가 없으면 로그인 페이지로
   if (!user) {
     return <Navigate to="/login" state={{ from: routeLocation }} replace />;
+  }
+
+  // 온보딩 미완료 시 온보딩 페이지로 리다이렉트 (온보딩 페이지 자체는 제외)
+  if (!preferences && routeLocation.pathname !== '/onboarding') {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+// --- Onboarding Route Component ---
+const OnboardingRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user, isCheckingAuth, preferences, isLoadingData } = useApp();
+  const routeLocation = useLocation();
+
+  // 인증 확인 중이면 로딩 표시
+  if (isCheckingAuth || isLoadingData) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-500">인증 확인 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 인증 확인이 완료되었지만 사용자가 없으면 로그인 페이지로
+  if (!user) {
+    return <Navigate to="/login" state={{ from: routeLocation }} replace />;
+  }
+
+  // 온보딩 완료 시 홈으로 리다이렉트
+  if (preferences) {
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
@@ -456,6 +492,9 @@ const App: React.FC = () => {
                   {/* Public Routes */}
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/auth/callback" element={<AuthCallbackPage />} />
+
+                  {/* Onboarding Route */}
+                  <Route path="/onboarding" element={<OnboardingRoute><OnboardingPage /></OnboardingRoute>} />
 
                   {/* Protected Routes */}
                   <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />

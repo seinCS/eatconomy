@@ -121,7 +121,7 @@ export const generateWeeklyPlanWithLLM = async (
 규칙:
 1. 각 끼니: 메인 1개 + 반찬 1개(선택)
 2. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
-3. 고려시항: 재료매칭률, 좋아요 레시피
+3. 고려사항: 재료매칭률, 좋아요 레시피
 4. 재료 전략: 같은 날 반복 최소화, 다른 날 연결 최대화
 5. 매운맛: ${preferences?.spicinessLevel === 1 ? '순한맛만' : '제한없음'}
 6. 메인과 반찬 간의 어울림 정도가 높도록 식단 구성
