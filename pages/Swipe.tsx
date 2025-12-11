@@ -96,7 +96,7 @@ const SwipePage: React.FC = () => {
             <div className="flex items-center gap-1 text-sm font-bold text-gray-800">
                 <span>{currentIndex + 1}</span>
                 <span className="text-gray-300">/</span>
-                <span>{TOTAL_CARDS}</span>
+                <span>{cards.length}</span>
             </div>
         </div>
         <div className="w-10"></div> {/* Spacer for centering */}
@@ -105,7 +105,7 @@ const SwipePage: React.FC = () => {
         <div className="absolute bottom-0 left-0 h-1 bg-gray-100 w-full">
             <div 
                 className="h-full bg-orange-500 transition-all duration-300"
-                style={{ width: `${((currentIndex) / TOTAL_CARDS) * 100}%` }}
+                style={{ width: `${cards.length > 0 ? ((currentIndex) / cards.length) * 100 : 0}%` }}
             ></div>
         </div>
       </div>
