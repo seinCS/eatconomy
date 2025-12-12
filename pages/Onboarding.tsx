@@ -12,7 +12,6 @@ const OnboardingPage: React.FC = () => {
   // State
   const [allergies, setAllergies] = useState<string[]>([]);
   const [dislikedFoods, setDislikedFoods] = useState<string[]>([]);
-  const [spicinessLevel, setSpicinessLevel] = useState<number>(2); // 기본값: 보통
   const [cookingSkill, setCookingSkill] = useState<string>('Beginner');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -32,7 +31,7 @@ const OnboardingPage: React.FC = () => {
       const prefs: UserPreferences = {
         allergies,
         dislikedFoods,
-        spicinessLevel,
+        spicinessLevel: 2, // 기본값 유지 (사용하지 않음)
         cookingSkill,
       };
       await updatePreferences(prefs);
@@ -108,29 +107,6 @@ const OnboardingPage: React.FC = () => {
                 </button>
               );
             })}
-          </div>
-        </div>
-
-        {/* 매운맛 선호도 */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <ChefHat className="w-5 h-5 text-orange-500" />
-            <h2 className="text-lg font-bold text-gray-900">맵기 선호도</h2>
-          </div>
-          <div className="flex gap-2 bg-gray-50 p-1 rounded-xl">
-            {[1, 2, 3].map(level => (
-              <button
-                key={level}
-                onClick={() => setSpicinessLevel(level)}
-                className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${
-                  spicinessLevel === level
-                    ? 'bg-white shadow text-orange-600'
-                    : 'text-gray-400 hover:text-gray-600'
-                }`}
-              >
-                {level === 1 ? '순한맛' : level === 2 ? '보통' : '매운맛'}
-              </button>
-            ))}
           </div>
         </div>
 
