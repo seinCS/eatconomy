@@ -79,7 +79,7 @@ eat-conomy/
 | `fridge` | `string[]` | 냉장고 재료 목록 | localStorage (`eat_conomy_db_v1`) |
 | `likedRecipes` | `Recipe[]` | 스와이프로 선택한 좋아하는 레시피 | localStorage (`eat_conomy_db_v1`) |
 | `dislikedRecipes` | `Recipe[]` | 스와이프로 선택한 싫어하는 레시피 | localStorage (`eat_conomy_db_v1`) |
-| `plannedRecipes` | `MealSet[]` | 주간 식단표 (14개 세트: 메인+반찬) | localStorage (`eat_conomy_db_v1`) |
+| `plannedRecipes` | `WeeklyPlan \| null` | 주간 식단표 (1 Cook, 2 Eat 모델) | localStorage (`eat_conomy_db_v1`) |
 | `shoppingListChecks` | `Record<string, boolean>` | 장보기 목록 체크 상태 | localStorage (`eat_conomy_db_v1`) |
 | `todayMealFinished` | `boolean` | 오늘 식사 완료 상태 (Legacy) | localStorage (`eat_conomy_db_v1`) |
 | `mealFinished` | `Record<string, Record<string, boolean>>` | 날짜별 식사 완료 상태 | localStorage (`eat_conomy_db_v1`) |
@@ -102,19 +102,23 @@ eat-conomy/
 
 현재 시스템은 **LLM 기반 식단 생성**을 사용하며, 기존 스코어링 알고리즘의 로직을 프롬프트에 반영하여 더 자연스럽고 맥락에 맞는 식단을 생성합니다.
 
-#### 2.1.1 LLM 기반 식단 생성 (현재 사용 중)
+#### 2.1.1 LLM 기반 식단 생성 (현재 사용 중) - "한국형 자취 최적화 모델"
 
 **파일 위치**: `services/openaiService.ts`  
 **함수명**: `generateWeeklyPlanWithLLM()`  
-**반환 타입**: `MealSet[]` (14개 세트: 점심/저녁 × 7일)  
+**반환 타입**: `WeeklyPlan` (주간 고정 반찬 3-4개 + 일자별 저녁 메뉴 7개)  
 **모델**: OpenAI GPT-4o-mini  
 **스키마 검증**: Zod (`WeeklyPlanSchema`)
+
+**핵심 전략: "흐름(Flow)과 재고(Stock)"의 분리**
+
+기존 시스템의 14개 독립된 식사 슬롯 구조를 **"1 Cook, 2 Eat"** 및 **"주간 고정 반찬"** 모델로 전환하여 자취생의 실제 생활 패턴을 반영합니다.
 
 **처리 흐름**:
 
 1. **안전 필터링 (Hard Filter)**
    ```typescript
-   // Line 56-75: services/openaiService.ts
+   // Line 66-85: services/openaiService.ts
    ```
    - 알러지 재료 포함 레시피 제외 (`preferences.allergies`)
    - 싫어하는 재료 포함 레시피 제외 (`preferences.dislikedFoods`)
@@ -123,45 +127,54 @@ eat-conomy/
 
 2. **레시피 데이터베이스 요약 생성**
    ```typescript
-   // Line 77-116: services/openaiService.ts
+   // Line 87-127: services/openaiService.ts
    ```
    - 각 레시피의 재료 매칭률 계산 (냉장고 재료 기준)
    - `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 분류
    - 좋아요 레시피 표시
-   - 간결한 형식으로 요약: `ID:이름(타입/식사타입,칼로리,매칭률%,좋아요)`
+   - 태그 정보 포함 (국물/반찬 구분용)
+   - 간결한 형식으로 요약: `ID:이름(타입/식사타입,칼로리,매칭률%,좋아요,태그)`
 
-3. **프롬프트 엔지니어링**
+3. **프롬프트 엔지니어링: "자취생 멘토" 페르소나**
    ```typescript
-   // Line 118-138: services/openaiService.ts
+   // Line 129-153: services/openaiService.ts
    ```
-   - 기존 스코어링 알고리즘의 핵심 로직을 프롬프트에 반영:
-     - 재료 매칭률 우선 고려
-     - 좋아요 레시피 우선 선택
-     - 같은 날 재료 반복 최소화
-     - 다른 날 재료 연결 최대화
-     - 메인과 반찬 간의 어울림 고려
-     - 점심/저녁 적합성 고려
+   - **페르소나**: "최소한의 노동으로 그럴듯하게 먹고 사는 10년 차 프로 자취러"
+   - **핵심 규칙**:
+     1. **[Cook Once, Eat Twice]**: 저녁 메뉴는 2인분 기준으로 요리하여, 다음 날 점심까지 먹는 것을 기본으로 한다. (점심 메뉴는 별도로 추천하지 않고 저녁 메뉴와 동일하게 설정)
+     2. **[Weekly Banchan]**: 일주일 동안 두고 먹을 수 있는 '밑반찬' 3-4가지를 먼저 선정한다. 반찬은 `#반찬`, `#볶음`, `#무침`, `#조림` 태그를 가진 레시피 중에서 선택한다.
+     3. **[Harmony]**: 메인 요리가 '국물/찌개' (`#국물` 태그)라면 밑반찬은 눅눅해지지 않는 '볶음/무침/조림'류로 구성한다. 국+국 조합은 절대 금지다.
+     4. 알러지 제외: 사용자 알러지 재료 목록 명시
+     5. 고려사항: 재료 매칭률, 좋아요 레시피 우선 선택
    - 토큰 사용량 최적화를 위해 간결한 형식 사용
 
 4. **OpenAI API 호출 (Structured Output)**
    ```typescript
-   // Line 145-200: services/openaiService.ts
+   // Line 155-225: services/openaiService.ts
    ```
    - `gpt-4o-mini` 모델 사용 (비용 효율적)
    - JSON Schema를 사용한 구조화된 출력 보장
    - `response_format: { type: 'json_schema', json_schema: ... }` 사용
+   - 출력 형식:
+     - `stapleSideDishes`: 주간 고정 반찬 3-4개 (recipeId, reasoning)
+     - `dinnerPlans`: 저녁 메뉴 7개 (day: 0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning)
    - Zod 스키마로 응답 검증
 
 5. **응답 파싱 및 변환**
    ```typescript
-   // Line 241-290: services/openaiService.ts
+   // Line 231-405: services/openaiService.ts
    ```
-   - LLM 응답을 `MealSet[]` 구조로 변환
+   - LLM 응답을 `WeeklyPlan` 구조로 변환
    - 레시피 ID로 정확한 레시피 데이터 매칭
    - 원본 레시피 데이터 유지 (메뉴명, 재료명 등 정확히 보존)
+   - 점심 자동 채우기: 전날 저녁 leftovers (첫날 제외)
+   - 누락된 항목 채우기 (폴백 로직)
    - 에러 처리 및 로깅
 
 **주요 특징**:
+- **현실성**: "1 Cook, 2 Eat" 법칙으로 요리 횟수 14회 → 7회로 반감
+- **효율성**: 주간 고정 반찬으로 매 끼니 반찬 고민 제거
+- **조화**: 국+국 조합 방지로 실제 식사 패턴 반영
 - **토큰 효율성**: 간결한 프롬프트로 비용 최적화
 - **일관성 보장**: JSON Schema + Zod 검증으로 항상 올바른 형식 보장
 - **데이터 정확성**: 레시피 ID로 매칭하여 원본 데이터 정확히 유지
@@ -311,25 +324,39 @@ eat-conomy/
 - 싫어하는 재료는 점수 산정 전 제외
 - 폴백 시에도 알러지 체크 유지
 
-#### 2.1.5 LLM 프롬프트 규칙
+#### 2.1.5 LLM 프롬프트 규칙: "한국형 자취 최적화 모델"
 
-**프롬프트에 반영된 스코어링 로직** (`services/openaiService.ts:118-138`):
+**프롬프트 페르소나 및 핵심 규칙** (`services/openaiService.ts:129-153`):
 
-1. **각 끼니 구성**: 메인 1개 + 반찬 1개(선택)
-2. **알러지 제외**: 사용자 알러지 재료 목록 명시
-3. **고려사항**: 
+**페르소나**: "최소한의 노동으로 그럴듯하게 먹고 사는 10년 차 프로 자취러"
+
+**핵심 규칙**:
+
+1. **[Cook Once, Eat Twice]**: 
+   - 저녁 메뉴는 2인분 기준으로 요리하여, 다음 날 점심까지 먹는 것을 기본으로 한다
+   - 점심 메뉴는 별도로 추천하지 않고 저녁 메뉴와 동일하게 설정
+   - 효과: 요리 횟수가 주 14회 → 주 7회로 반감
+
+2. **[Weekly Banchan]**: 
+   - 일주일 동안 두고 먹을 수 있는 '밑반찬' 3-4가지를 먼저 선정
+   - 반찬은 `#반찬`, `#볶음`, `#무침`, `#조림` 태그를 가진 레시피 중에서 선택
+   - 효과: "반찬 뭐 먹지?" 고민 제거, 주말에 한 번 준비 후 일주일 사용
+
+3. **[Harmony]**: 
+   - 메인 요리가 '국물/찌개' (`#국물` 태그)라면 밑반찬은 눅눅해지지 않는 '볶음/무침/조림'류로 구성
+   - 국+국 조합은 절대 금지
+   - 효과: 실제 식사 패턴 반영, 조화로운 식단 구성
+
+4. **알러지 제외**: 사용자 알러지 재료 목록 명시
+
+5. **고려사항**: 
    - 재료 매칭률 (냉장고 재료 기준)
    - 좋아요 레시피 우선 선택
-4. **재료 전략**: 
-   - 같은 날 재료 반복 최소화
-   - 다른 날 재료 연결 최대화
-5. **어울림 고려**: 메인과 반찬 간의 어울림 정도가 높도록 구성
-6. **식사 시간대 적합성**: 점심과 저녁의 메인 메뉴는 일반적으로 사람들이 선호하는 메뉴 유형 고려
 
 **레시피 데이터 형식**:
 ```
-ID:이름(메인/반찬/점심/저녁,칼로리kcal,매칭률%,좋아요)
-예: 101:돼지고기 김치찌개(main/both,450kcal,매칭60%,좋아요)
+ID:이름(타입/식사타입,칼로리kcal,매칭률%,좋아요,태그:태그1/태그2)
+예: 101:돼지고기 김치찌개(main/both,450kcal,매칭60%,좋아요,태그:#국물/#한식)
 ```
 
 **입력 데이터**:
@@ -337,6 +364,10 @@ ID:이름(메인/반찬/점심/저녁,칼로리kcal,매칭률%,좋아요)
 - 좋아요 레시피 ID 목록
 - 싫어요 레시피 ID 목록
 - 알러지 재료 목록
+
+**출력 형식**:
+- `stapleSideDishes`: 주간 고정 반찬 3-4개 (recipeId, reasoning)
+- `dinnerPlans`: 저녁 메뉴 7개 (day: 0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning)
 
 #### 2.1.6 스코어링 알고리즘 점수 산정 방식 (레거시)
 
@@ -382,7 +413,7 @@ interface DBState {
   users: Record<string, User>;
   fridgeItems: Record<string, string[]>;              // userId -> 재료 목록
   weeklyPlans: Record<string, (Recipe | null)[]>;    // userId -> 14개 슬롯 (레거시: 메인만 저장)
-  // TODO: 백엔드 API 업데이트 시 MealSet[] 구조로 변경 필요
+  // TODO: 백엔드 API 업데이트 시 WeeklyPlan 구조로 변경 필요
   likedRecipes: Record<string, number[]>;            // userId -> 레시피 ID 배열
   dislikedRecipes: Record<string, number[]>;          // userId -> 레시피 ID 배열
   shoppingChecks: Record<string, Record<string, boolean>>; // userId -> { 재료명: 체크여부 }
@@ -391,7 +422,10 @@ interface DBState {
 }
 ```
 
-**참고**: 현재 백엔드 API는 레거시 구조를 지원하므로 프론트엔드에서 MealSet[]를 Recipe[]로 변환하여 저장합니다.
+**참고**: 
+- 프론트엔드에서는 `WeeklyPlan` 구조를 사용하지만, 백엔드 API는 아직 레거시 구조를 지원합니다.
+- `App.tsx`의 `generatePlan()` 함수에서 `WeeklyPlan`을 `Recipe[]`로 변환하여 백엔드에 저장합니다 (저녁 메인만 저장).
+- `updatePlan()` 함수도 레거시 인덱스 계산을 사용하여 호환성을 유지합니다.
 
 #### 2.2.2 저장 시점
 
@@ -477,10 +511,44 @@ interface Recipe {
   mealType?: 'lunch' | 'dinner' | 'both'; // 점심/저녁 적합성 (자동 분류)
 }
 
-// 식사 슬롯: 메인음식 + 반찬 세트
+/**
+ * 식사 슬롯: 메인음식 + 반찬 세트 (레거시, 호환성 유지)
+ */
 interface MealSet {
   main: Recipe | null;            // 메인음식
   side: Recipe | null;             // 반찬
+}
+
+/**
+ * 주간 식단 계획 (1 Cook, 2 Eat 모델)
+ */
+interface WeeklyPlan {
+  // 이번 주 고정 반찬 (일주일 내내 먹을 것)
+  stapleSideDishes: Recipe[];     // 3-4개
+  
+  // 일자별 계획
+  dailyPlans: DailyPlan[];
+}
+
+/**
+ * 일자별 식단 계획
+ */
+interface DailyPlan {
+  day: number;                    // 0=월요일, 6=일요일
+  
+  // 점심: 보통 전날 저녁 leftovers 또는 간편식
+  lunch: {
+    type: 'LEFTOVER' | 'COOK' | 'EAT_OUT';
+    targetRecipeId?: number;      // LEFTOVER일 경우 전날 저녁 ID 참조
+    recipe?: Recipe;              // COOK 또는 EAT_OUT일 경우 레시피
+  };
+  
+  // 저녁: 메인 요리하는 시간
+  dinner: {
+    mainRecipe: Recipe;
+    // 고정 반찬 중 무엇을 꺼내 먹을지 추천 (조리 X, 서빙 O)
+    recommendedSideDishIds: number[];
+  };
 }
 
 // 식사 슬롯 (레거시, 현재 미사용)
@@ -792,7 +860,7 @@ interface User {
 [Gemini API]
 ```
 
-### 6.2 식단 생성 플로우
+### 6.2 식단 생성 플로우 (1 Cook, 2 Eat 모델)
 
 ```
 [사용자: 홈 화면에서 "이번주 식단 다시 추천받기" 클릭]
@@ -811,18 +879,29 @@ interface User {
     ↓
 [openaiService.ts: generateWeeklyPlanWithLLM()]
     ├─→ [안전 필터링: 알러지/비선호 제외]
-    ├─→ [레시피 데이터 요약: 매칭률, 메타데이터, 좋아요 정보]
-    ├─→ [프롬프트 생성: 기존 스코어링 로직 반영]
+    ├─→ [레시피 데이터 요약: 매칭률, 메타데이터, 좋아요 정보, 태그]
+    ├─→ [프롬프트 생성: "자취생 멘토" 페르소나, 1 Cook 2 Eat, Weekly Banchan, Harmony 규칙]
     ├─→ [OpenAI API 호출: GPT-4o-mini, JSON Schema]
+    │   ├─→ stapleSideDishes: 주간 고정 반찬 3-4개
+    │   └─→ dinnerPlans: 저녁 메뉴 7개 (각각 recommendedSideDishIds 포함)
     ├─→ [응답 검증: Zod 스키마로 검증]
-    └─→ [변환: MealSet[] 구조로 변환 (14개 세트)]
+    └─→ [변환: WeeklyPlan 구조로 변환]
+    │   ├─→ stapleSideDishes: Recipe[] (3-4개)
+    │   └─→ dailyPlans: DailyPlan[] (7개)
+    │       ├─→ lunch: LEFTOVER (전날 저녁) 또는 COOK (첫날)
+    │       └─→ dinner: mainRecipe + recommendedSideDishIds
     ↓
-[App.tsx: setPlannedRecipes(mealSets)]
+[App.tsx: setPlannedRecipes(weeklyPlan)]
     ↓
-[apiService.ts: savePlan()] - 백엔드 저장 (메인만, 레거시 호환)
+[apiService.ts: savePlan()] - 백엔드 저장 (저녁 메인만, 레거시 호환)
     ↓
 [UI 업데이트: Plan 페이지로 이동]
 ```
+
+**핵심 차이점**:
+- **기존**: 14개 독립된 식사 슬롯 (점심/저녁 × 7일)
+- **신규**: 주간 고정 반찬 3-4개 + 저녁 메뉴 7개 (점심은 전날 저녁 leftovers)
+- **효과**: 요리 횟수 14회 → 7회로 반감, 현실적인 자취생 패턴 반영
 
 **참고**: 스코어링 알고리즘(`generateScoredWeeklyPlan`)은 구현되어 있으나 현재는 LLM 기반 시스템을 사용합니다.
 
@@ -901,24 +980,29 @@ npm run test:ui
 ---
 
 **문서 작성 완료일**: 2024년 12월  
-**최종 업데이트**: 2024년 12월 10일 (v1.2.0)  
+**최종 업데이트**: 2024년 12월 10일 (v1.2.0) - "한국형 자취 최적화 모델" 반영  
 **최종 검토 필요 항목**: 실제 프로덕션 배포 전 보안 검토 및 성능 테스트 권장
 
 ---
 
 ## 9. v1.2.0 주요 변경사항 요약
 
-### 9.1 LLM 기반 식단 추천 시스템 도입
+### 9.1 LLM 기반 식단 추천 시스템 도입: "한국형 자취 최적화 모델"
 
 - **OpenAI GPT-4o-mini 통합**: 기존 스코어링 알고리즘을 LLM 기반 시스템으로 전환
+- **"1 Cook, 2 Eat" 법칙**: 저녁 메뉴는 2인분 기준으로 요리하여 다음 날 점심까지 먹는 것을 기본으로 함
+  - 효과: 요리 횟수가 주 14회 → 주 7회로 반감
+  - 점심 메뉴는 별도 추천하지 않고 저녁 메뉴와 동일하게 설정
+- **"주간 고정 반찬" 시스템**: 일주일 동안 두고 먹을 수 있는 밑반찬 3-4가지를 먼저 선정
+  - 반찬은 `#반찬`, `#볶음`, `#무침`, `#조림` 태그를 가진 레시피 중에서 선택
+  - 효과: 매 끼니 반찬 고민 제거, 주말에 한 번 준비 후 일주일 사용
+- **"Harmony" 규칙**: 메인 요리가 국물/찌개(`#국물` 태그)라면 밑반찬은 눅눅해지지 않는 '볶음/무침/조림'류로 구성
+  - 국+국 조합 절대 금지
+  - 효과: 실제 식사 패턴 반영, 조화로운 식단 구성
 - **Structured Output**: JSON Schema + Zod 검증으로 일관된 형식 보장
-- **프롬프트 엔지니어링**: 기존 스코어링 로직의 핵심 요소를 프롬프트에 반영
+- **프롬프트 엔지니어링**: "자취생 멘토" 페르소나로 현실적인 식단 생성
   - 재료 매칭률 우선 고려
   - 좋아요 레시피 우선 선택
-  - 같은 날 재료 반복 최소화
-  - 다른 날 재료 연결 최대화
-  - 메인과 반찬 간의 어울림 고려
-  - 점심/저녁 적합성 고려
 - **토큰 최적화**: 간결한 프롬프트 형식으로 비용 효율성 확보
 - **에러 처리**: API 실패 시 명확한 에러 메시지 및 로깅
 
@@ -928,11 +1012,18 @@ npm run test:ui
 - **레시피 메타데이터 자동 분류**: `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 추가
 - **LLM 기반 추천**: 기존 스코어링 알고리즘의 로직을 프롬프트에 반영하여 더 자연스러운 식단 생성
 
-### 9.2 타입 시스템 개선
+### 9.2 타입 시스템 개선: WeeklyPlan 구조 도입
 
-- `MealSet` 타입 추가: `{ main: Recipe | null, side: Recipe | null }`
+- `WeeklyPlan` 타입 추가: 
+  - `stapleSideDishes: Recipe[]` (주간 고정 반찬 3-4개)
+  - `dailyPlans: DailyPlan[]` (일자별 계획 7개)
+- `DailyPlan` 타입 추가:
+  - `day: number` (0=월요일, 6=일요일)
+  - `lunch: { type: 'LEFTOVER' | 'COOK' | 'EAT_OUT', targetRecipeId?, recipe? }`
+  - `dinner: { mainRecipe: Recipe, recommendedSideDishIds: number[] }`
+- `MealSet` 타입: 레거시 호환성을 위해 유지 (`{ main: Recipe | null, side: Recipe | null }`)
 - `Recipe` 타입 확장: `dishType`, `mealType` 속성 추가
-- `plannedRecipes` 타입 변경: `(Recipe | null)[]` → `MealSet[]`
+- `plannedRecipes` 타입 변경: `MealSet[]` → `WeeklyPlan | null`
 
 ### 9.3 UI/UX 개선
 
@@ -940,7 +1031,7 @@ npm run test:ui
 - **홈 화면 오늘의 식단**: 메인음식과 반찬 모두 표시
 - **냉장고 페이지**: 사용률 낮은 "이 재료로 추천받기" 버튼 제거
 
-### 9.4 LLM 기반 알고리즘 상세
+### 9.4 LLM 기반 알고리즘 상세: "한국형 자취 최적화 모델"
 
 **LLM 식단 생성 프로세스** (`generateWeeklyPlanWithLLM`):
 
@@ -953,26 +1044,38 @@ npm run test:ui
    - 재료 매칭률 계산 (냉장고 재료 기준)
    - `dishType`, `mealType` 자동 분류
    - 좋아요 레시피 표시
+   - 태그 정보 포함 (국물/반찬 구분용)
    - 간결한 형식으로 요약
 
-3. **프롬프트 생성**:
-   - 기존 스코어링 알고리즘의 핵심 로직을 프롬프트에 반영
+3. **프롬프트 생성: "자취생 멘토" 페르소나**:
+   - **페르소나**: "최소한의 노동으로 그럴듯하게 먹고 사는 10년 차 프로 자취러"
+   - **핵심 규칙**:
+     - [Cook Once, Eat Twice]: 저녁 메뉴는 2인분 기준으로 요리하여 다음 날 점심까지 먹는 것을 기본으로 함
+     - [Weekly Banchan]: 일주일 동안 두고 먹을 수 있는 밑반찬 3-4가지를 먼저 선정
+     - [Harmony]: 메인이 국물/찌개라면 밑반찬은 눅눅해지지 않는 볶음/무침/조림류로 구성
    - 토큰 사용량 최적화를 위해 간결한 형식 사용
 
 4. **OpenAI API 호출**:
    - 모델: `gpt-4o-mini` (비용 효율적)
    - Structured Output: JSON Schema 사용
-   - 응답 형식: 14개 식사 (day: 0-6, mealType: lunch/dinner, mainRecipeId, sideRecipeId, reasoning)
+   - 응답 형식:
+     - `stapleSideDishes`: 주간 고정 반찬 3-4개 (recipeId, reasoning)
+     - `dinnerPlans`: 저녁 메뉴 7개 (day: 0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning)
 
 5. **응답 검증 및 변환**:
    - Zod 스키마로 응답 검증
    - 레시피 ID로 정확한 레시피 데이터 매칭
-   - `MealSet[]` 구조로 변환 (14개 세트)
+   - `WeeklyPlan` 구조로 변환:
+     - `stapleSideDishes`: Recipe[] (3-4개)
+     - `dailyPlans`: DailyPlan[] (7개)
+       - `lunch`: LEFTOVER (전날 저녁) 또는 COOK (첫날)
+       - `dinner`: mainRecipe + recommendedSideDishIds
 
-**7일 식단 생성 결과**:
-- 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
-- LLM이 재료 연결성과 어울림을 고려하여 자동으로 구성
-- 총 14개 MealSet 반환 (점심/저녁 × 7일)
+**주간 식단 생성 결과**:
+- 주간 고정 반찬 3-4개: 일주일 내내 먹을 밑반찬
+- 저녁 메뉴 7개: 각각 메인 요리 1개 + 고정 반찬 중 추천 1-2개
+- 점심: 전날 저녁 leftovers (첫날 제외)
+- 효과: 요리 횟수 14회 → 7회로 반감, 현실적인 자취생 패턴 반영
 
 ### 9.5 스코어링 알고리즘 상세 (레거시)
 
