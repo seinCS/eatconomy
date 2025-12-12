@@ -15,6 +15,7 @@ interface SlotData {
     sideRecipeId?: number; // 반찬 레시피 ID (고정 반찬 중 하나)
     isLunch?: boolean; // 점심 메뉴인지 여부
     lunchRecipe?: Recipe; // 점심 레시피 (점심 메뉴인 경우)
+    isRecommendedSide?: boolean; // 추천 반찬인지 여부 (주간 식단 내에서의 추천 반찬)
 }
 
 const PlanPage: React.FC = () => {
@@ -75,9 +76,10 @@ const PlanPage: React.FC = () => {
     isSideFromStaple: boolean = false, 
     sideRecipeId?: number,
     isLunch: boolean = false,
-    lunchRecipe?: Recipe
+    lunchRecipe?: Recipe,
+    isRecommendedSide: boolean = false
   ) => {
-    setSelectedSlot({ dailyPlan, day, isMain, isSideFromStaple, sideRecipeId, isLunch, lunchRecipe });
+    setSelectedSlot({ dailyPlan, day, isMain, isSideFromStaple, sideRecipeId, isLunch, lunchRecipe, isRecommendedSide });
     setIsReplacing(false); // Reset replace view
   };
 
@@ -97,7 +99,7 @@ const PlanPage: React.FC = () => {
       ? selectedSlot.lunchRecipe
       : selectedSlot.isMain 
       ? selectedSlot.dailyPlan.dinner.mainRecipe 
-      : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId
+      : ((selectedSlot.isSideFromStaple || selectedSlot.isRecommendedSide) && selectedSlot.sideRecipeId
           ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
           : null);
     
@@ -139,26 +141,34 @@ const PlanPage: React.FC = () => {
         ? null 
         : selectedSlot.dailyPlan.dinner.mainRecipe;
 
-      const all = getAllRecipes();
+      let candidates: Recipe[] = [];
       
-      // dishType 필터링: 메인은 main만, 반찬은 side만, 점심은 main만 (간편식)
-      let dishTypeFilter: 'main' | 'side' | undefined = undefined;
-      if (selectedSlot.isMain) {
-        dishTypeFilter = 'main';
-      } else if (selectedSlot.isSideFromStaple) {
-        dishTypeFilter = 'side';
-      } else if (selectedSlot.isLunch) {
-        dishTypeFilter = 'main'; // 점심은 간편식이므로 main 타입만
+      // 추천 반찬 교체: 냉장고 친구들(stapleSideDishes) 내에서만 선택
+      if (selectedSlot.isRecommendedSide && selectedSlot.sideRecipeId) {
+        candidates = plannedRecipes.stapleSideDishes.filter(s => s.id !== selectedSlot.sideRecipeId);
+      } else {
+        // 고정 반찬 교체 또는 메인/점심 교체: 전체 레시피에서 필터링
+        const all = getAllRecipes();
+        
+        // dishType 필터링: 메인은 main만, 반찬은 side만, 점심은 main만 (간편식)
+        let dishTypeFilter: 'main' | 'side' | undefined = undefined;
+        if (selectedSlot.isMain) {
+          dishTypeFilter = 'main';
+        } else if (selectedSlot.isSideFromStaple) {
+          dishTypeFilter = 'side'; // 고정 반찬 교체 시 side 타입만
+        } else if (selectedSlot.isLunch) {
+          dishTypeFilter = 'main'; // 점심은 간편식이므로 main 타입만
+        }
+        
+        candidates = getAlternativeRecipes(
+            currentRecipe.id, 
+            prevRecipe, 
+            otherSlotRecipe, 
+            all, 
+            dislikedRecipes,
+            dishTypeFilter
+        );
       }
-      
-      const candidates = getAlternativeRecipes(
-          currentRecipe.id, 
-          prevRecipe, 
-          otherSlotRecipe, 
-          all, 
-          dislikedRecipes,
-          dishTypeFilter
-      );
       
       setAlternatives(candidates);
       setIsReplacing(true);
@@ -180,8 +190,15 @@ const PlanPage: React.FC = () => {
         // 메인 교체
         dailyPlan.dinner.mainRecipe = newRecipe;
         await updatePlan(day, dailyPlan);
+      } else if (selectedSlot.isRecommendedSide && selectedSlot.sideRecipeId) {
+        // 추천 반찬 교체: 냉장고 친구들 내에서 선택한 반찬으로 교체
+        const newRecommendedSideIds = dailyPlan.dinner.recommendedSideDishIds.map(id => 
+          id === selectedSlot.sideRecipeId ? newRecipe.id : id
+        );
+        dailyPlan.dinner.recommendedSideDishIds = newRecommendedSideIds;
+        await updatePlan(day, dailyPlan);
       } else if (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId) {
-        // 고정 반찬 교체
+        // 고정 반찬 교체 (냉장고 친구들 박스에서 클릭한 경우)
         const newStapleSideDishes = plannedRecipes.stapleSideDishes.map(side => 
           side.id === selectedSlot.sideRecipeId ? newRecipe : side
         );
@@ -443,7 +460,7 @@ const PlanPage: React.FC = () => {
                     dailyPlan={dailyPlan}
                     stapleSideDishes={plannedRecipes.stapleSideDishes}
                     onClickMain={() => dailyPlan.dinner.mainRecipe && handleRecipeClick(dailyPlan, dayIndex, true)}
-                    onClickSide={(sideId) => handleRecipeClick(dailyPlan, dayIndex, false, true, sideId)}
+                    onClickSide={(sideId) => handleRecipeClick(dailyPlan, dayIndex, false, true, sideId, false, undefined, true)}
                     onDragStart={() => handleDragStart(dayIndex)}
                     onDragEnd={(e, info) => handleDragEnd(e, info, dayIndex)}
                     isDragging={draggedDay === dayIndex}
@@ -471,7 +488,7 @@ const PlanPage: React.FC = () => {
                                         return selectedSlot.lunchRecipe.name;
                                       } else if (selectedSlot.isMain) {
                                         return selectedSlot.dailyPlan.dinner.mainRecipe?.name || '메인 없음';
-                                      } else if (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes) {
+                                      } else if ((selectedSlot.isSideFromStaple || selectedSlot.isRecommendedSide) && selectedSlot.sideRecipeId && plannedRecipes) {
                                         const side = plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId);
                                         return side?.name || '반찬 없음';
                                       }
@@ -483,7 +500,7 @@ const PlanPage: React.FC = () => {
                                     ? selectedSlot.lunchRecipe
                                     : selectedSlot.isMain 
                                     ? selectedSlot.dailyPlan.dinner.mainRecipe 
-                                    : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
+                                    : ((selectedSlot.isSideFromStaple || selectedSlot.isRecommendedSide) && selectedSlot.sideRecipeId && plannedRecipes
                                         ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
                                         : null);
                                   if (!currentRecipe) return null;
