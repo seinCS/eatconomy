@@ -18,6 +18,7 @@ import { getAllRecipes } from './services/recipeService';
 // import { generateScoredWeeklyPlan } from './services/recipeService'; // LLM 테스트용 주석처리
 import { authService } from './services/authService';
 import { apiService } from './services/apiService';
+import { dbService } from './services/dbService';
 import { WEEKLY_PLAN_SLOTS, SWIPE_CARD_COUNT } from './constants';
 import { getTodayDateKey, getTodayMealIndices } from './utils/date';
 
@@ -195,9 +196,24 @@ const App: React.FC = () => {
 
           setPreferences(fullUser?.preferences);
           setFridge(fridgeData);
-          // API에서 받은 Recipe[]는 레거시 구조이므로 null로 설정
-          // TODO: 백엔드 API가 WeeklyPlan을 반환하도록 업데이트 필요
-          setPlannedRecipes(null);
+          
+          // WeeklyPlan 로드 (새 구조)
+          try {
+            const weeklyPlan = await dbService.getWeeklyPlan(user.id);
+            if (weeklyPlan) {
+              setPlannedRecipes(weeklyPlan);
+              console.log('[loadUserData] WeeklyPlan 로드 완료:', weeklyPlan.stapleSideDishes.length, '개 반찬,', weeklyPlan.dailyPlans.length, '일');
+            } else {
+              // API에서 받은 Recipe[]는 레거시 구조이므로 null로 설정
+              // TODO: 백엔드 API가 WeeklyPlan을 반환하도록 업데이트 필요
+              setPlannedRecipes(null);
+              console.log('[loadUserData] WeeklyPlan 없음 (레거시 데이터 또는 신규 사용자)');
+            }
+          } catch (error) {
+            console.error('[loadUserData] WeeklyPlan 로드 실패:', error);
+            setPlannedRecipes(null);
+          }
+          
           setLikedRecipes(likedData);
           setDislikedRecipes(dislikedData);
           setShoppingListChecks(shoppingData);
@@ -213,7 +229,7 @@ const App: React.FC = () => {
         // Clear state on logout
         setFridge([]);
         setPreferences(undefined);
-        setPlannedRecipes(Array(WEEKLY_PLAN_SLOTS).fill(null).map(() => ({ main: null, side: null })));
+        setPlannedRecipes(null);
         setLikedRecipes([]);
         setDislikedRecipes([]);
         setShoppingListChecks({});
@@ -306,6 +322,10 @@ const App: React.FC = () => {
     };
     setPlannedRecipes(newPlan);
     try {
+      // localStorage에 WeeklyPlan 저장 (새 구조)
+      await dbService.saveWeeklyPlan(user.id, newPlan);
+      console.log('[updatePlan] localStorage WeeklyPlan 저장 완료');
+      
       // API는 아직 Recipe 단일 구조를 지원하므로 메인만 저장 (임시)
       // TODO: 백엔드 API를 WeeklyPlan 구조로 업데이트 필요
       if (dailyPlan.dinner.mainRecipe) {
@@ -362,6 +382,14 @@ const App: React.FC = () => {
       
       setPlannedRecipes(weeklyPlan);
       console.log('[generatePlan] 상태 업데이트 완료');
+      
+      // localStorage에 WeeklyPlan 저장 (새 구조)
+      try {
+        await dbService.saveWeeklyPlan(user.id, weeklyPlan);
+        console.log('[generatePlan] localStorage WeeklyPlan 저장 완료');
+      } catch (error) {
+        console.error('[generatePlan] localStorage 저장 실패:', error);
+      }
       
       // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
       // TODO: 백엔드 API를 WeeklyPlan 구조로 업데이트 필요

@@ -1,4 +1,4 @@
-import { Recipe, UserPreferences } from '../types';
+import { Recipe, UserPreferences, WeeklyPlan, DailyPlan } from '../types';
 import { MOCK_FRIDGE, SEED_RECIPES } from '../constants';
 
 // --- Types representing DB Schema ---
@@ -13,7 +13,8 @@ export interface User {
 interface DBState {
   users: Record<string, User>;
   fridgeItems: Record<string, string[]>; // userId -> ingredient names
-  weeklyPlans: Record<string, (Recipe | null)[]>; // userId -> plan
+  weeklyPlans: Record<string, (Recipe | null)[]>; // userId -> plan (레거시, 호환성 유지)
+  weeklyPlansV2: Record<string, WeeklyPlan | null>; // userId -> WeeklyPlan (새 구조)
   likedRecipes: Record<string, number[]>; // userId -> recipeIds
   dislikedRecipes: Record<string, number[]>; // userId -> recipeIds
   shoppingChecks: Record<string, Record<string, boolean>>; // userId -> { item: bool }
@@ -44,6 +45,7 @@ const loadDB = (): DBState => {
     users: {},
     fridgeItems: {},
     weeklyPlans: {},
+    weeklyPlansV2: {},
     likedRecipes: {},
     dislikedRecipes: {},
     shoppingChecks: {},
@@ -81,6 +83,8 @@ export const dbService = {
       // New User Setup
       db.fridgeItems[user.id] = [...MOCK_FRIDGE];
       db.weeklyPlans[user.id] = Array(14).fill(null);
+      if (!db.weeklyPlansV2) db.weeklyPlansV2 = {};
+      db.weeklyPlansV2[user.id] = null;
       db.likedRecipes[user.id] = [];
       db.dislikedRecipes[user.id] = [];
       db.shoppingChecks[user.id] = {};
@@ -142,7 +146,7 @@ export const dbService = {
     }
   },
 
-  // Plan
+  // Plan (레거시, 호환성 유지)
   getPlan: async (userId: string): Promise<(Recipe | null)[]> => {
     return db.weeklyPlans[userId] || Array(14).fill(null);
   },
@@ -154,6 +158,38 @@ export const dbService = {
     const plan = db.weeklyPlans[userId] || Array(14).fill(null);
     plan[index] = recipe;
     db.weeklyPlans[userId] = plan;
+    saveDB(db);
+  },
+
+  // WeeklyPlan (새 구조)
+  getWeeklyPlan: async (userId: string): Promise<WeeklyPlan | null> => {
+    if (!db.weeklyPlansV2) {
+      db.weeklyPlansV2 = {};
+      saveDB(db);
+    }
+    
+    // 새 구조에서 먼저 확인
+    if (db.weeklyPlansV2[userId] !== undefined) {
+      return db.weeklyPlansV2[userId];
+    }
+    
+    // 레거시 데이터가 있으면 마이그레이션 시도
+    const legacyPlan = db.weeklyPlans[userId];
+    if (legacyPlan && legacyPlan.some(r => r !== null)) {
+      console.log('[dbService] 레거시 데이터 마이그레이션 시도...');
+      // 레거시 데이터는 null로 설정 (마이그레이션 불가능)
+      if (!db.weeklyPlansV2) db.weeklyPlansV2 = {};
+      db.weeklyPlansV2[userId] = null;
+      saveDB(db);
+    }
+    
+    return null;
+  },
+  saveWeeklyPlan: async (userId: string, weeklyPlan: WeeklyPlan | null) => {
+    if (!db.weeklyPlansV2) {
+      db.weeklyPlansV2 = {};
+    }
+    db.weeklyPlansV2[userId] = weeklyPlan;
     saveDB(db);
   },
 
@@ -213,6 +249,9 @@ export const dbService = {
     delete db.users[userId];
     delete db.fridgeItems[userId];
     delete db.weeklyPlans[userId];
+    if (db.weeklyPlansV2) {
+      delete db.weeklyPlansV2[userId];
+    }
     delete db.likedRecipes[userId];
     delete db.dislikedRecipes[userId];
     delete db.shoppingChecks[userId];
