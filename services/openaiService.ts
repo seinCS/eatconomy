@@ -72,7 +72,30 @@ export const generateWeeklyPlanWithLLM = async (
   const dislikedIds = dislikedRecipes.map(r => r.id);
   const likedIds = likedRecipes.map(r => r.id);
 
-  const candidateRecipes = SEED_RECIPES.filter(recipe => {
+  // 1-1. 안전 필터링된 레시피 (메타데이터 추가)
+  const enrichedRecipes = SEED_RECIPES.map(r => {
+    // enrichRecipeMetadata 함수를 사용하여 dishType, mealType 추가
+    const mainDishTags = ['#고기', '#메인', '#한그릇', '#면', '#국물', '#분식', '#빵', '#덮밥', '#요리'];
+    const sideDishTags = ['#반찬', '#안주'];
+    const hasMainTag = r.tags.some(t => mainDishTags.some(mt => t.includes(mt)));
+    const hasSideTag = r.tags.some(t => sideDishTags.some(st => t.includes(st)));
+    
+    let dishType: 'main' | 'side' = 'main'; // 기본값은 메인
+    if (hasSideTag) {
+      dishType = 'side';
+    } else if (!hasMainTag && r.calories < 300) {
+      // 메인 태그가 없고 칼로리가 낮으면 반찬으로 분류
+      dishType = 'side';
+    }
+    
+    return {
+      ...r,
+      dishType,
+    };
+  });
+
+  // 1-2. 필터링: 알러지 및 비선호 레시피 제외
+  const candidateRecipes = enrichedRecipes.filter(recipe => {
     // 알러지 재료 포함 레시피 제외
     const hasAllergen = recipe.ingredients.some(ing => allergenList.includes(ing));
     if (hasAllergen) return false;
@@ -87,8 +110,15 @@ export const generateWeeklyPlanWithLLM = async (
     return true;
   });
 
-  // 2. 레시피 데이터베이스 요약 (간결한 형식)
-  const recipeDbSummary = candidateRecipes.map(r => {
+  // 1-3. 메인/반찬 엄격 분리
+  const mainCandidates = candidateRecipes.filter(r => r.dishType === 'main');
+  const sideCandidates = candidateRecipes.filter(r => r.dishType === 'side');
+
+  console.log('[OpenAI] 메인 후보 레시피 수:', mainCandidates.length);
+  console.log('[OpenAI] 반찬 후보 레시피 수:', sideCandidates.length);
+
+  // 2. 레시피 데이터베이스 요약 (메인/반찬 분리)
+  const mainRecipeSummary = mainCandidates.map(r => {
     const nonStapleIngredients = r.ingredients.filter(ing => !(STAPLES as readonly string[]).includes(ing));
     const matchCount = nonStapleIngredients.filter(ing => fridgeItems.includes(ing)).length;
     const matchRatio = nonStapleIngredients.length > 0 ? (matchCount / nonStapleIngredients.length) * 100 : 0;
@@ -116,12 +146,32 @@ export const generateWeeklyPlanWithLLM = async (
     return {
       id: r.id,
       name: r.name, // 정확한 메뉴명 유지
-      dishType,
+      dishType: r.dishType, // 이미 분류된 dishType 사용
       mealType,
       calories: r.calories,
       matchRatio: Math.round(matchRatio),
       isLiked: likedIds.includes(r.id),
       tags: r.tags, // 태그 정보 추가 (국물/반찬 구분용)
+    };
+  }).sort((a, b) => {
+    if (a.isLiked && !b.isLiked) return -1;
+    if (!a.isLiked && b.isLiked) return 1;
+    return b.matchRatio - a.matchRatio;
+  });
+
+  const sideRecipeSummary = sideCandidates.map(r => {
+    const nonStapleIngredients = r.ingredients.filter(ing => !(STAPLES as readonly string[]).includes(ing));
+    const matchCount = nonStapleIngredients.filter(ing => fridgeItems.includes(ing)).length;
+    const matchRatio = nonStapleIngredients.length > 0 ? (matchCount / nonStapleIngredients.length) * 100 : 0;
+    
+    return {
+      id: r.id,
+      name: r.name,
+      dishType: r.dishType, // 'side'
+      calories: r.calories,
+      matchRatio: Math.round(matchRatio),
+      isLiked: likedIds.includes(r.id),
+      tags: r.tags,
     };
   }).sort((a, b) => {
     if (a.isLiked && !b.isLiked) return -1;
@@ -143,9 +193,14 @@ Objective:
 6. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
 7. 고려사항: 재료매칭률, 좋아요 레시피 우선 선택
 
-레시피 DB:
-${recipeDbSummary.map(r => 
-  `${r.id}:${r.name}(${r.dishType}/${r.mealType},${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''},태그:${r.tags?.join('/') || ''})`
+메인 요리 후보 (저녁 메뉴용, dishType=main):
+${mainRecipeSummary.map(r => 
+  `${r.id}:${r.name}(${r.mealType},${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''},태그:${r.tags?.join('/') || ''})`
+).join(' ')}
+
+반찬 후보 (주간 고정 반찬용, dishType=side):
+${sideRecipeSummary.map(r => 
+  `${r.id}:${r.name}(${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''},태그:${r.tags?.join('/') || ''})`
 ).join(' ')}
 
 냉장고: ${fridgeItems.join(',')}
@@ -154,13 +209,18 @@ ${recipeDbSummary.map(r =>
 
 출력 형식:
 1. stapleSideDishes: 주간 고정 반찬 3-4개 (recipeId, reasoning)
+   - 반드시 "반찬 후보"에서만 선택하세요. 메인 요리 후보에서 선택하면 안 됩니다!
 2. dinnerPlans: 저녁 메뉴 7개 (day:0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning, lunchRecipeId, isLeftoverSuitable)
+   - mainRecipeId: 반드시 "메인 요리 후보"에서만 선택하세요. 반찬 후보에서 선택하면 안 됩니다!
+   - recommendedSideDishIds: 반드시 stapleSideDishes에 포함된 반찬 ID만 사용하세요.
    - lunchRecipeId: 
-     * 첫날(day 0): 반드시 간편식 레시피 ID 제공 (필수! null 불가!)
+     * 첫날(day 0): 반드시 간편식 레시피 ID 제공 (필수! null 불가!) - 메인 요리 후보 중 #초간단, #간단, #한그릇 태그
      * 다른 날(day 1-6): 재가열 불가능한 메뉴일 경우에만 간편식 레시피 ID 제공, 그 외는 null
    - isLeftoverSuitable: 이 저녁 메뉴가 다음날 점심 leftovers로 적합한지 (라면, 면 요리 등은 false)
 
-중요 규칙:
+중요 규칙 (엄격히 준수):
+- 메인 요리(mainRecipeId)는 반드시 "메인 요리 후보"에서만 선택하세요. 반찬 후보에서 선택하면 안 됩니다!
+- 반찬(stapleSideDishes)은 반드시 "반찬 후보"에서만 선택하세요. 메인 요리 후보에서 선택하면 안 됩니다!
 - 첫날(day 0)은 반드시 lunchRecipeId에 간편식 레시피 ID를 제공해야 합니다. (#초간단, #간단, #한그릇 태그) null로 설정하면 안 됩니다!
 - 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.
 - #면, #초간단 태그를 가진 메뉴는 isLeftoverSuitable=false로 설정하고, 다음날 점심이 필요한 경우 lunchRecipeId에 간편식 레시피 ID를 제공하세요.
@@ -168,7 +228,9 @@ ${recipeDbSummary.map(r =>
 
   try {
     console.log('[OpenAI] API 호출 시작...');
-    console.log('[OpenAI] 후보 레시피 수:', candidateRecipes.length);
+    console.log('[OpenAI] 전체 후보 레시피 수:', candidateRecipes.length);
+    console.log('[OpenAI] 메인 후보 레시피 수:', mainCandidates.length);
+    console.log('[OpenAI] 반찬 후보 레시피 수:', sideCandidates.length);
     console.log('[OpenAI] 프롬프트 길이:', systemPrompt.length, '자');
     
     // 5. OpenAI API 호출 (structured output with JSON Schema)
@@ -318,11 +380,16 @@ ${recipeDbSummary.map(r =>
     // 일자별 계획 변환
     const dailyPlans: DailyPlan[] = [];
     for (const dinnerPlan of validated.dinnerPlans) {
-      const mainRecipe = SEED_RECIPES.find(r => r.id === dinnerPlan.mainRecipeId);
+      const mainRecipe = mainCandidates.find(r => r.id === dinnerPlan.mainRecipeId);
       if (!mainRecipe) {
-        console.warn(`[OpenAI] 메인 레시피 ID ${dinnerPlan.mainRecipeId}를 찾을 수 없습니다.`);
+        console.warn(`[OpenAI] 메인 레시피 ID ${dinnerPlan.mainRecipeId}를 찾을 수 없거나 메인 후보에 없습니다.`);
         missingRecipeIds.push(dinnerPlan.mainRecipeId);
         continue;
+      }
+      
+      // dishType 검증
+      if (mainRecipe.dishType !== 'main') {
+        console.warn(`[OpenAI] 메인으로 선택된 레시피가 반찬 타입입니다: ${mainRecipe.name} (ID: ${dinnerPlan.mainRecipeId}, dishType: ${mainRecipe.dishType})`);
       }
 
       // 추천 반찬 찾기
@@ -359,11 +426,13 @@ ${recipeDbSummary.map(r =>
         } else if (previousDayDinner && previousDayDinner.isLeftoverSuitable === false) {
           // 전날 저녁이 leftovers 부적합한 경우
           if (dinnerPlan.lunchRecipeId) {
-            // LLM이 간편식을 제공한 경우
+            // LLM이 간편식을 제공한 경우 (메인 후보에서 찾기)
             lunchType = 'COOK';
-            const lunchRecipeCandidate = SEED_RECIPES.find(r => r.id === dinnerPlan.lunchRecipeId);
+            const lunchRecipeCandidate = mainCandidates.find(r => r.id === dinnerPlan.lunchRecipeId);
             if (lunchRecipeCandidate) {
               lunchRecipe = lunchRecipeCandidate;
+            } else {
+              console.warn(`[OpenAI] Day ${dinnerPlan.day} 점심 레시피 ID ${dinnerPlan.lunchRecipeId}를 메인 후보에서 찾을 수 없습니다.`);
             }
           } else {
             // LLM이 간편식을 제공하지 않았으면 점심 없음 (외식 또는 간단히 해결)
@@ -436,8 +505,8 @@ ${recipeDbSummary.map(r =>
           });
           
           if (!emergencyLunch) {
-            // 더 넓은 범위에서 찾기
-            emergencyLunch = SEED_RECIPES.find(r => 
+            // 메인 후보에서 더 넓은 범위로 찾기
+            emergencyLunch = mainCandidates.find(r => 
               r.tags.some(t => t.includes('#초간단') || t.includes('#간단')) &&
               r.calories < 500 &&
               !r.ingredients.some(ing => allergenList.includes(ing))
@@ -504,16 +573,16 @@ ${recipeDbSummary.map(r =>
       if (dp.dinner.mainRecipe) usedRecipeIds.add(dp.dinner.mainRecipe.id);
     });
 
-    // 고정 반찬이 3개 미만이면 채우기
+    // 고정 반찬이 3개 미만이면 채우기 (반찬 후보에서만)
     while (stapleSideDishes.length < 3) {
-      const availableSides = candidateRecipes.filter(
-        r => !usedRecipeIds.has(r.id) && 
-        (r.dishType === 'side' || r.tags.some(t => t.includes('#반찬') || t.includes('#볶음') || t.includes('#무침') || t.includes('#조림')))
+      const availableSides = sideCandidates.filter(
+        r => !usedRecipeIds.has(r.id)
       );
       if (availableSides.length > 0) {
         const fallback = availableSides[0];
         stapleSideDishes.push(fallback);
         usedRecipeIds.add(fallback.id);
+        console.log(`[OpenAI] 고정 반찬 폴백 추가: ${fallback.name} (ID: ${fallback.id}, dishType: ${fallback.dishType})`);
       } else {
         break;
       }
@@ -523,9 +592,8 @@ ${recipeDbSummary.map(r =>
     for (let day = 0; day < 7; day++) {
       const existingPlan = dailyPlans.find(dp => dp.day === day);
       if (!existingPlan || !existingPlan.dinner.mainRecipe) {
-        const availableMains = candidateRecipes.filter(
-          r => !usedRecipeIds.has(r.id) && 
-          (r.dishType === 'main' || !r.dishType)
+        const availableMains = mainCandidates.filter(
+          r => !usedRecipeIds.has(r.id)
         );
         if (availableMains.length > 0) {
           const fallback = availableMains[0];
@@ -543,15 +611,11 @@ ${recipeDbSummary.map(r =>
               r.calories < 500
             );
             
-            // candidateRecipes에 없으면 SEED_RECIPES 전체에서 찾기
+            // 메인 후보에 없으면 칼로리 조건 완화
             if (simpleMeals.length === 0) {
-              simpleMeals = SEED_RECIPES.filter(r => 
+              simpleMeals = mainCandidates.filter(r => 
                 !usedRecipeIds.has(r.id) &&
-                r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
-                r.calories < 500 &&
-                !r.ingredients.some(ing => allergenList.includes(ing)) &&
-                !r.ingredients.some(ing => dislikedFoodList.includes(ing)) &&
-                !dislikedIds.includes(r.id)
+                r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇'))
               );
             }
             
