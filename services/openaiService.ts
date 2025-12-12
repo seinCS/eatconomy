@@ -333,13 +333,18 @@ ${recipeDbSummary.map(r =>
       let targetRecipeId: number | undefined = undefined;
 
       if (dinnerPlan.day === 0) {
-        // 첫날: 간편식 레시피 추천
+        // 첫날: 간편식 레시피 추천 (필수)
         lunchType = 'COOK';
         if (dinnerPlan.lunchRecipeId) {
           const lunchRecipeCandidate = SEED_RECIPES.find(r => r.id === dinnerPlan.lunchRecipeId);
           if (lunchRecipeCandidate) {
             lunchRecipe = lunchRecipeCandidate;
+            console.log(`[OpenAI] Day ${dinnerPlan.day} 점심 (LLM 제공): ${lunchRecipe.name} (ID: ${dinnerPlan.lunchRecipeId})`);
+          } else {
+            console.warn(`[OpenAI] Day ${dinnerPlan.day} 점심 레시피 ID ${dinnerPlan.lunchRecipeId}를 찾을 수 없습니다. 폴백 사용.`);
           }
+        } else {
+          console.warn(`[OpenAI] Day ${dinnerPlan.day} 점심 lunchRecipeId가 제공되지 않았습니다. 폴백 사용.`);
         }
       } else {
         // 다른 날: 전날 저녁 leftovers 또는 간편식
@@ -366,13 +371,57 @@ ${recipeDbSummary.map(r =>
 
       // lunchRecipe가 없으면 간편식 레시피 자동 선택 (폴백)
       if (lunchType === 'COOK' && !lunchRecipe) {
-        const simpleMeals = candidateRecipes.filter(r => 
+        // candidateRecipes에서 먼저 찾기 (usedRecipeIds 체크 완화 - 점심용이므로 저녁과 겹쳐도 OK)
+        let simpleMeals = candidateRecipes.filter(r => 
           r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
           r.calories < 500
         );
+        
+        // candidateRecipes에 없으면 SEED_RECIPES 전체에서 찾기 (알러지/비선호 체크만)
+        if (simpleMeals.length === 0) {
+          simpleMeals = SEED_RECIPES.filter(r => 
+            r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
+            r.calories < 500 &&
+            !r.ingredients.some(ing => allergenList.includes(ing)) &&
+            !r.ingredients.some(ing => dislikedFoodList.includes(ing)) &&
+            !dislikedIds.includes(r.id)
+          );
+        }
+        
+        // 여전히 없으면 칼로리 조건 완화
+        if (simpleMeals.length === 0) {
+          simpleMeals = candidateRecipes.filter(r => 
+            r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇'))
+          );
+        }
+        
+        // 마지막 폴백: 가장 간단한 레시피 선택
+        if (simpleMeals.length === 0) {
+          simpleMeals = candidateRecipes.filter(r => r.calories < 400);
+        }
+        
         if (simpleMeals.length > 0) {
           lunchRecipe = simpleMeals[0];
+          console.log(`[OpenAI] Day ${dinnerPlan.day} 점심 폴백: ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+        } else {
+          console.error(`[OpenAI] Day ${dinnerPlan.day} 점심 간편식 레시피를 찾을 수 없습니다!`);
         }
+      }
+      
+      // 첫날 점심은 반드시 있어야 함
+      if (dinnerPlan.day === 0 && lunchType === 'COOK' && !lunchRecipe) {
+        console.error(`[OpenAI] 첫날 점심 레시피가 설정되지 않았습니다! 강제로 기본 간편식 선택.`);
+        // 최후의 수단: 계란말이 또는 참치마요덮밥
+        const emergencyLunch = SEED_RECIPES.find(r => r.id === 108 || r.id === 124); // 계란말이 또는 참치마요덮밥
+        if (emergencyLunch && !allergenList.some(a => emergencyLunch.ingredients.includes(a))) {
+          lunchRecipe = emergencyLunch;
+          console.log(`[OpenAI] 첫날 점심 긴급 폴백: ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+        }
+      }
+
+      // 첫날 점심이 없으면 에러 로그
+      if (dinnerPlan.day === 0 && lunchType === 'COOK' && !lunchRecipe) {
+        console.error(`[OpenAI] Day ${dinnerPlan.day} 점심 레시피가 설정되지 않았습니다!`);
       }
 
       dailyPlans.push({
@@ -392,6 +441,13 @@ ${recipeDbSummary.map(r =>
       });
 
       console.log(`[OpenAI] Day ${dinnerPlan.day} 저녁: ${mainRecipe.name} (ID: ${dinnerPlan.mainRecipeId})`);
+      if (lunchRecipe) {
+        console.log(`[OpenAI] Day ${dinnerPlan.day} 점심: ${lunchRecipe.name} (ID: ${lunchRecipe.id}, Type: ${lunchType})`);
+      } else if (lunchType === 'LEFTOVER') {
+        console.log(`[OpenAI] Day ${dinnerPlan.day} 점심: Leftover (전날 저녁 ID: ${targetRecipeId})`);
+      } else {
+        console.warn(`[OpenAI] Day ${dinnerPlan.day} 점심: 없음 (Type: ${lunchType})`);
+      }
     }
     
     if (missingRecipeIds.length > 0) {
@@ -437,15 +493,31 @@ ${recipeDbSummary.map(r =>
           let targetRecipeId: number | undefined = undefined;
           
           if (day === 0) {
-            // 첫날: 간편식
-            const simpleMeals = candidateRecipes.filter(r => 
+            // 첫날: 간편식 (필수)
+            let simpleMeals = candidateRecipes.filter(r => 
               !usedRecipeIds.has(r.id) &&
               r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
               r.calories < 500
             );
+            
+            // candidateRecipes에 없으면 SEED_RECIPES 전체에서 찾기
+            if (simpleMeals.length === 0) {
+              simpleMeals = SEED_RECIPES.filter(r => 
+                !usedRecipeIds.has(r.id) &&
+                r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
+                r.calories < 500 &&
+                !r.ingredients.some(ing => allergenList.includes(ing)) &&
+                !r.ingredients.some(ing => dislikedFoodList.includes(ing)) &&
+                !dislikedIds.includes(r.id)
+              );
+            }
+            
             if (simpleMeals.length > 0) {
               lunchRecipe = simpleMeals[0];
               usedRecipeIds.add(lunchRecipe.id);
+              console.log(`[OpenAI] Day ${day} 점심 폴백 (누락 채우기): ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+            } else {
+              console.error(`[OpenAI] Day ${day} 점심 간편식 레시피를 찾을 수 없습니다!`);
             }
           } else {
             // 다른 날: 전날 저녁 leftovers
