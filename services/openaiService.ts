@@ -155,13 +155,16 @@ ${recipeDbSummary.map(r =>
 출력 형식:
 1. stapleSideDishes: 주간 고정 반찬 3-4개 (recipeId, reasoning)
 2. dinnerPlans: 저녁 메뉴 7개 (day:0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning, lunchRecipeId, isLeftoverSuitable)
-   - lunchRecipeId: 첫날(day 0)이거나 재가열 불가능한 메뉴일 경우 간편식 레시피 ID, 그 외는 null
+   - lunchRecipeId: 
+     * 첫날(day 0): 반드시 간편식 레시피 ID 제공 (필수! null 불가!)
+     * 다른 날(day 1-6): 재가열 불가능한 메뉴일 경우에만 간편식 레시피 ID 제공, 그 외는 null
    - isLeftoverSuitable: 이 저녁 메뉴가 다음날 점심 leftovers로 적합한지 (라면, 면 요리 등은 false)
 
-중요: 
+중요 규칙:
+- 첫날(day 0)은 반드시 lunchRecipeId에 간편식 레시피 ID를 제공해야 합니다. (#초간단, #간단, #한그릇 태그) null로 설정하면 안 됩니다!
 - 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.
-- #면, #초간단 태그를 가진 메뉴는 isLeftoverSuitable=false로 설정하고, lunchRecipeId에 간편식 레시피 ID를 제공하세요.
-- 첫날(day 0)은 반드시 lunchRecipeId에 간편식 레시피 ID를 제공하세요.`;
+- #면, #초간단 태그를 가진 메뉴는 isLeftoverSuitable=false로 설정하고, 다음날 점심이 필요한 경우 lunchRecipeId에 간편식 레시피 ID를 제공하세요.
+- 다른 날(day 1-6)은 일반적으로 lunchRecipeId를 null로 설정하고, 전날 저녁 leftovers를 사용합니다.`;
 
   try {
     console.log('[OpenAI] API 호출 시작...');
@@ -179,7 +182,7 @@ ${recipeDbSummary.map(r =>
         },
         {
           role: 'user',
-          content: '주간 고정 반찬 3-4개와 저녁 메뉴 7개를 생성하세요. 점심은 전날 저녁 leftovers이므로 별도 추천하지 않습니다.',
+          content: '주간 고정 반찬 3-4개와 저녁 메뉴 7개를 생성하세요.\n\n중요: 첫날(day 0) 점심은 반드시 간편식 레시피 ID를 lunchRecipeId에 제공해야 합니다. 다른 날(day 1-6) 점심은 전날 저녁 leftovers이므로 lunchRecipeId는 null로 설정하되, 재가열 불가능한 메뉴(라면, 면 요리 등)일 경우에만 간편식 레시피 ID를 제공하세요.',
         },
       ],
       response_format: {
@@ -408,14 +411,51 @@ ${recipeDbSummary.map(r =>
         }
       }
       
-      // 첫날 점심은 반드시 있어야 함
-      if (dinnerPlan.day === 0 && lunchType === 'COOK' && !lunchRecipe) {
-        console.error(`[OpenAI] 첫날 점심 레시피가 설정되지 않았습니다! 강제로 기본 간편식 선택.`);
-        // 최후의 수단: 계란말이 또는 참치마요덮밥
-        const emergencyLunch = SEED_RECIPES.find(r => r.id === 108 || r.id === 124); // 계란말이 또는 참치마요덮밥
-        if (emergencyLunch && !allergenList.some(a => emergencyLunch.ingredients.includes(a))) {
-          lunchRecipe = emergencyLunch;
-          console.log(`[OpenAI] 첫날 점심 긴급 폴백: ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+      // 첫날 점심은 반드시 있어야 함 (최종 보장)
+      if (dinnerPlan.day === 0) {
+        if (lunchType !== 'COOK' || !lunchRecipe) {
+          console.error(`[OpenAI] 첫날 점심이 설정되지 않았습니다! Type: ${lunchType}, Recipe: ${lunchRecipe ? lunchRecipe.name : 'null'}`);
+          // 강제로 간편식으로 변경
+          lunchType = 'COOK';
+          
+          // 최후의 수단: 계란말이 또는 참치마요덮밥
+          let emergencyLunch = SEED_RECIPES.find(r => {
+            if (r.id === 108 || r.id === 124) { // 계란말이 또는 참치마요덮밥
+              // 알러지 체크만
+              return !r.ingredients.some(ing => allergenList.includes(ing));
+            }
+            return false;
+          });
+          
+          if (!emergencyLunch) {
+            // 더 넓은 범위에서 찾기
+            emergencyLunch = SEED_RECIPES.find(r => 
+              r.tags.some(t => t.includes('#초간단') || t.includes('#간단')) &&
+              r.calories < 500 &&
+              !r.ingredients.some(ing => allergenList.includes(ing))
+            );
+          }
+          
+          if (emergencyLunch) {
+            lunchRecipe = emergencyLunch;
+            console.log(`[OpenAI] 첫날 점심 긴급 폴백: ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+          } else {
+            console.error(`[OpenAI] 첫날 점심 긴급 폴백도 실패했습니다!`);
+          }
+        }
+      }
+
+      // 첫날 점심 최종 검증 (dailyPlans.push 전)
+      if (dinnerPlan.day === 0 && (!lunchRecipe || lunchType !== 'COOK')) {
+        console.error(`[OpenAI] 첫날 점심이 여전히 설정되지 않았습니다! 최종 검증 실패.`);
+        // 강제로 기본값 설정
+        lunchType = 'COOK';
+        if (!lunchRecipe) {
+          const defaultLunch = SEED_RECIPES.find(r => r.id === 108); // 계란말이
+          if (defaultLunch) {
+            lunchRecipe = defaultLunch;
+            console.log(`[OpenAI] 첫날 점심 기본값 설정: ${lunchRecipe.name} (ID: ${lunchRecipe.id})`);
+          }
         }
       }
 
