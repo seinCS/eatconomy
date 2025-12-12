@@ -419,11 +419,6 @@ ${recipeDbSummary.map(r =>
         }
       }
 
-      // 첫날 점심이 없으면 에러 로그
-      if (dinnerPlan.day === 0 && lunchType === 'COOK' && !lunchRecipe) {
-        console.error(`[OpenAI] Day ${dinnerPlan.day} 점심 레시피가 설정되지 않았습니다!`);
-      }
-
       dailyPlans.push({
         day: dinnerPlan.day,
         lunch: {
