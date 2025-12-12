@@ -451,33 +451,22 @@ ${sideRecipeSummary.map(r =>
 
       // lunchRecipe가 없으면 간편식 레시피 자동 선택 (폴백) - 단, EAT_OUT 타입은 제외
       if (lunchType === 'COOK' && !lunchRecipe) {
-        // candidateRecipes에서 먼저 찾기 (usedRecipeIds 체크 완화 - 점심용이므로 저녁과 겹쳐도 OK)
-        let simpleMeals = candidateRecipes.filter(r => 
+        // 메인 후보에서 간편식 찾기 (점심용이므로 저녁과 겹쳐도 OK)
+        let simpleMeals: typeof mainCandidates = mainCandidates.filter(r => 
           r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
           r.calories < 500
         );
         
-        // candidateRecipes에 없으면 SEED_RECIPES 전체에서 찾기 (알러지/비선호 체크만)
+        // 메인 후보에 없으면 칼로리 조건 완화
         if (simpleMeals.length === 0) {
-          simpleMeals = SEED_RECIPES.filter(r => 
-            r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
-            r.calories < 500 &&
-            !r.ingredients.some(ing => allergenList.includes(ing)) &&
-            !r.ingredients.some(ing => dislikedFoodList.includes(ing)) &&
-            !dislikedIds.includes(r.id)
-          );
-        }
-        
-        // 여전히 없으면 칼로리 조건 완화
-        if (simpleMeals.length === 0) {
-          simpleMeals = candidateRecipes.filter(r => 
+          simpleMeals = mainCandidates.filter(r => 
             r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇'))
           );
         }
         
-        // 마지막 폴백: 가장 간단한 레시피 선택
+        // 여전히 없으면 칼로리 조건만으로 메인 후보에서 선택
         if (simpleMeals.length === 0) {
-          simpleMeals = candidateRecipes.filter(r => r.calories < 400);
+          simpleMeals = mainCandidates.filter(r => r.calories < 400);
         }
         
         if (simpleMeals.length > 0) {
