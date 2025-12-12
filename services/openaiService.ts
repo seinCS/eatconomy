@@ -72,30 +72,8 @@ export const generateWeeklyPlanWithLLM = async (
   const dislikedIds = dislikedRecipes.map(r => r.id);
   const likedIds = likedRecipes.map(r => r.id);
 
-  // 1-1. 안전 필터링된 레시피 (메타데이터 추가)
-  const enrichedRecipes = SEED_RECIPES.map(r => {
-    // enrichRecipeMetadata 함수를 사용하여 dishType, mealType 추가
-    const mainDishTags = ['#고기', '#메인', '#한그릇', '#면', '#국물', '#분식', '#빵', '#덮밥', '#요리'];
-    const sideDishTags = ['#반찬', '#안주'];
-    const hasMainTag = r.tags.some(t => mainDishTags.some(mt => t.includes(mt)));
-    const hasSideTag = r.tags.some(t => sideDishTags.some(st => t.includes(st)));
-    
-    let dishType: 'main' | 'side' = 'main'; // 기본값은 메인
-    if (hasSideTag) {
-      dishType = 'side';
-    } else if (!hasMainTag && r.calories < 300) {
-      // 메인 태그가 없고 칼로리가 낮으면 반찬으로 분류
-      dishType = 'side';
-    }
-    
-    return {
-      ...r,
-      dishType,
-    };
-  });
-
-  // 1-2. 필터링: 알러지 및 비선호 레시피 제외
-  const candidateRecipes = enrichedRecipes.filter(recipe => {
+  // 1. 필터링: 알러지 및 비선호 레시피 제외
+  const candidateRecipes = SEED_RECIPES.filter(recipe => {
     // 알러지 재료 포함 레시피 제외
     const hasAllergen = recipe.ingredients.some(ing => allergenList.includes(ing));
     if (hasAllergen) return false;
@@ -146,7 +124,7 @@ export const generateWeeklyPlanWithLLM = async (
     return {
       id: r.id,
       name: r.name, // 정확한 메뉴명 유지
-      dishType: r.dishType, // 이미 분류된 dishType 사용
+      dishType: r.dishType, // 레시피 데이터의 dishType 필드 사용
       mealType,
       calories: r.calories,
       matchRatio: Math.round(matchRatio),

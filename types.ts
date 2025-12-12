@@ -19,7 +19,7 @@ export interface Recipe {
   calories: number;
   image?: string;
   reason?: string; // AI generated reason
-  dishType?: 'main' | 'side'; // 메인음식 또는 반찬
+  dishType: 'main' | 'side'; // 메인음식 또는 반찬 (필수)
   mealType?: 'lunch' | 'dinner' | 'both'; // 점심/저녁 적합성
 }
 

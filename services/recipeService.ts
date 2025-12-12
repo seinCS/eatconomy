@@ -3,25 +3,12 @@ import { SEED_RECIPES, STAPLES, WEEKLY_PLAN_SLOTS } from '../constants';
 import { Recipe, UserPreferences, MealSet, WeeklyPlan } from '../types';
 
 /**
- * 레시피에 메타데이터 자동 추가 (dishType, mealType)
+ * 레시피에 메타데이터 자동 추가 (mealType만 추정, dishType은 데이터에서 직접 사용)
  */
 const enrichRecipeMetadata = (recipe: Recipe): Recipe => {
-  // dishType 분류: 메인 vs 반찬
-  const mainDishTags = ['#고기', '#메인', '#한그릇', '#면', '#국물', '#분식', '#빵', '#덮밥', '#요리'];
-  const sideDishTags = ['#반찬', '#안주'];
+  // dishType은 레시피 데이터에 이미 명시적으로 정의되어 있으므로 그대로 사용
   
-  const hasMainTag = recipe.tags.some(t => mainDishTags.some(mt => t.includes(mt)));
-  const hasSideTag = recipe.tags.some(t => sideDishTags.some(st => t.includes(st)));
-  
-  let dishType: 'main' | 'side' = 'main'; // 기본값은 메인
-  if (hasSideTag) {
-    dishType = 'side';
-  } else if (!hasMainTag && recipe.calories < 300) {
-    // 메인 태그가 없고 칼로리가 낮으면 반찬으로 분류
-    dishType = 'side';
-  }
-  
-  // mealType 분류: 점심 vs 저녁
+  // mealType 분류: 점심 vs 저녁 (태그 기반)
   const lunchTags = ['#아침', '#브런치', '#간단', '#초간단', '#건강', '#채소'];
   const dinnerTags = ['#고기', '#메인', '#든든', '#파티', '#요리'];
   
@@ -44,7 +31,7 @@ const enrichRecipeMetadata = (recipe: Recipe): Recipe => {
   
   return {
     ...recipe,
-    dishType,
+    // dishType은 데이터에서 직접 사용 (변경하지 않음)
     mealType,
   };
 };
