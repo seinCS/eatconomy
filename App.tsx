@@ -526,7 +526,7 @@ const BottomNav = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  if (location.pathname === '/swipe' || location.pathname === '/login') return null;
+  if (location.pathname === '/swipe' || location.pathname === '/login' || location.pathname === '/onboarding') return null;
 
   const navItems = [
     { path: '/', icon: Home, label: '홈' },
