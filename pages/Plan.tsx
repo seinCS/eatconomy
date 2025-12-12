@@ -272,29 +272,38 @@ const PlanPage: React.FC = () => {
                 <h3 className="text-sm font-bold text-gray-400 mb-4">{dayName}</h3>
 
                 {/* Lunch Slot (작게 표시, LEFTOVER 강조) */}
-                <div className="mb-3 relative">
-                  {chainToLunch.length > 0 && (
-                    <div className="absolute -top-6 left-4 right-0 flex justify-center z-0">
-                      <div className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 flex items-center">
-                        <LinkIcon size={10} className="mr-1"/>
-                        {chainToLunch[0]} 연계
+                {dailyPlan.lunch.type !== 'EAT_OUT' && (
+                  <div className="mb-3 relative">
+                    {chainToLunch.length > 0 && (
+                      <div className="absolute -top-6 left-4 right-0 flex justify-center z-0">
+                        <div className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 flex items-center">
+                          <LinkIcon size={10} className="mr-1"/>
+                          {chainToLunch[0]} 연계
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  <LunchCard
-                    dailyPlan={dailyPlan}
-                    prevDayDinner={prevDayPlan?.dinner?.mainRecipe}
-                    onClick={() => {
-                      if (dailyPlan.lunch.type === 'LEFTOVER' && dailyPlan.lunch.targetRecipeId) {
-                        const targetRecipe = prevDayPlan?.dinner?.mainRecipe;
-                        if (targetRecipe) {
-                          // 점심은 전날 저녁 메인을 클릭한 것으로 처리
-                          handleRecipeClick(dailyPlan, dayIndex, true);
-                        }
+                    )}
+                    <LunchCard
+                      dailyPlan={dailyPlan}
+                      lunchRecipe={
+                        dailyPlan.lunch.type === 'LEFTOVER' && dailyPlan.lunch.targetRecipeId
+                          ? prevDayPlan?.dinner?.mainRecipe || null
+                          : dailyPlan.lunch.type === 'COOK' && dailyPlan.lunch.recipe
+                          ? dailyPlan.lunch.recipe
+                          : null
                       }
-                    }}
-                  />
-                </div>
+                      onClick={() => {
+                        const targetRecipe = dailyPlan.lunch.type === 'LEFTOVER' && dailyPlan.lunch.targetRecipeId
+                          ? prevDayPlan?.dinner?.mainRecipe
+                          : dailyPlan.lunch.type === 'COOK' && dailyPlan.lunch.recipe
+                          ? dailyPlan.lunch.recipe
+                          : null;
+                        if (targetRecipe) {
+                          handleRecipeClick(targetRecipe, dayIndex, false, false);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
 
                 {/* Dinner Slot (강조) */}
                 <div className="mt-2">
@@ -557,10 +566,11 @@ const PlanPage: React.FC = () => {
 // 점심 카드 (작게 표시, LEFTOVER 강조)
 const LunchCard: React.FC<{
   dailyPlan: DailyPlan;
-  prevDayDinner: Recipe | null | undefined;
+  lunchRecipe: Recipe | null;
   onClick: () => void;
-}> = ({ dailyPlan, prevDayDinner, onClick }) => {
-  if (dailyPlan.lunch.type === 'LEFTOVER' && prevDayDinner) {
+}> = ({ dailyPlan, lunchRecipe, onClick }) => {
+  // LEFTOVER 타입: 전날 저녁 leftovers
+  if (dailyPlan.lunch.type === 'LEFTOVER' && lunchRecipe) {
     return (
       <div 
         onClick={onClick}
@@ -569,28 +579,52 @@ const LunchCard: React.FC<{
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gray-200 overflow-hidden flex-shrink-0">
             <img
-              src={`/images/recipes/${prevDayDinner.id}.jpg`}
-              alt={prevDayDinner.name}
+              src={`/images/recipes/${lunchRecipe.id}.jpg`}
+              alt={lunchRecipe.name}
               className="w-full h-full object-cover"
               onError={(e) => {
-                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${prevDayDinner.id}/100/100`;
+                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${lunchRecipe.id}/100/100`;
               }}
             />
           </div>
           <div className="flex-1 min-w-0">
             <span className="text-[10px] text-gray-400 font-medium block">점심 (Leftover)</span>
-            <span className="text-xs font-semibold text-gray-600 truncate">어제 저녁 남은 {prevDayDinner.name}</span>
+            <span className="text-xs font-semibold text-gray-600 truncate">어제 저녁 남은 {lunchRecipe.name}</span>
           </div>
         </div>
       </div>
     );
   }
   
-  return (
-    <div className="p-2 border-2 border-dashed border-gray-200 rounded-lg text-center text-gray-400 text-xs">
-      점심 메뉴 없음
-    </div>
-  );
+  // COOK 타입: 간편식
+  if (dailyPlan.lunch.type === 'COOK' && lunchRecipe) {
+    return (
+      <div 
+        onClick={onClick}
+        className="bg-white p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50 active:scale-98 transition-transform"
+      >
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gray-200 overflow-hidden flex-shrink-0">
+            <img
+              src={`/images/recipes/${lunchRecipe.id}.jpg`}
+              alt={lunchRecipe.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${lunchRecipe.id}/100/100`;
+              }}
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-[10px] text-gray-400 font-medium block">점심 (간편식)</span>
+            <span className="text-xs font-semibold text-gray-700 truncate">{lunchRecipe.name}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  // EAT_OUT 타입 또는 레시피가 없는 경우: 점심 없음 (표시하지 않음)
+  return null;
 };
 
 // 저녁 카드 (강조)

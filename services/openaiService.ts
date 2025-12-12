@@ -356,23 +356,31 @@ ${recipeDbSummary.map(r =>
           // 전날 저녁이 leftovers 적합하면 leftovers 사용
           lunchType = 'LEFTOVER';
           targetRecipeId = previousDayDinner.mainRecipeId;
-        } else {
-          // 전날 저녁이 leftovers 부적합하거나 lunchRecipeId가 제공된 경우 간편식 사용
-          lunchType = 'COOK';
+        } else if (previousDayDinner && previousDayDinner.isLeftoverSuitable === false) {
+          // 전날 저녁이 leftovers 부적합한 경우
           if (dinnerPlan.lunchRecipeId) {
+            // LLM이 간편식을 제공한 경우
+            lunchType = 'COOK';
             const lunchRecipeCandidate = SEED_RECIPES.find(r => r.id === dinnerPlan.lunchRecipeId);
             if (lunchRecipeCandidate) {
               lunchRecipe = lunchRecipeCandidate;
             }
-          } else if (previousDayDinner) {
-            // lunchRecipeId가 없으면 전날 저녁 메인을 사용 (폴백)
-            targetRecipeId = previousDayDinner.mainRecipeId;
-            lunchType = 'LEFTOVER';
+          } else {
+            // LLM이 간편식을 제공하지 않았으면 점심 없음 (외식 또는 간단히 해결)
+            lunchType = 'EAT_OUT';
+            lunchRecipe = undefined;
+            targetRecipeId = undefined;
+            console.log(`[OpenAI] Day ${dinnerPlan.day} 점심: 전날 저녁이 재가열 불가능하므로 점심 없음 (외식/간단히 해결)`);
           }
+        } else {
+          // 전날 저녁이 없는 경우 (이론적으로 발생하지 않아야 함)
+          lunchType = 'EAT_OUT';
+          lunchRecipe = undefined;
+          targetRecipeId = undefined;
         }
       }
 
-      // lunchRecipe가 없으면 간편식 레시피 자동 선택 (폴백)
+      // lunchRecipe가 없으면 간편식 레시피 자동 선택 (폴백) - 단, EAT_OUT 타입은 제외
       if (lunchType === 'COOK' && !lunchRecipe) {
         // candidateRecipes에서 먼저 찾기 (usedRecipeIds 체크 완화 - 점심용이므로 저녁과 겹쳐도 OK)
         let simpleMeals = candidateRecipes.filter(r => 

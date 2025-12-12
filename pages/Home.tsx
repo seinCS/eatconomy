@@ -53,6 +53,7 @@ const HomePage: React.FC = () => {
       } else if (todayPlan.lunch.type === 'COOK' && todayPlan.lunch.recipe) {
         lunch = todayPlan.lunch.recipe;
       }
+      // EAT_OUT 타입은 lunch가 null로 유지됨 (점심 없음)
 
       // 저녁: 메인 + 고정 반찬 중 추천
       const dinner = todayPlan.dinner.mainRecipe || null;
@@ -166,8 +167,8 @@ const HomePage: React.FC = () => {
                     <Utensils size={14} className="mr-1"/> 오늘의 식단
                 </h2>
                 
-                {/* Lunch (Leftover 강조) */}
-                {todaysMeals.lunch && (
+                {/* Lunch (Leftover 강조) - EAT_OUT 타입은 표시하지 않음 */}
+                {todaysMeals.lunch && todaysMeals.lunchType !== 'EAT_OUT' && (
                   <div className={`mb-3 p-3 rounded-xl border-2 transition-all ${
                     mealsFinished.lunch 
                     ? 'bg-green-50 border-green-200' 
