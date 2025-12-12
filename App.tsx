@@ -25,6 +25,7 @@ import { getTodayDateKey, getTodayMealIndices } from './utils/date';
 interface AppContextType {
   user: User | null;
   isCheckingAuth: boolean; // 인증 확인 중인지 여부
+  isLoadingData: boolean; // 사용자 데이터 로딩 중인지 여부
   login: (provider: 'kakao' | 'google') => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -472,7 +473,7 @@ const App: React.FC = () => {
 
   return (
     <AppContext.Provider value={{ 
-      user, isCheckingAuth, login, logout, deleteAccount,
+      user, isCheckingAuth, isLoadingData, login, logout, deleteAccount,
       preferences, updatePreferences,
       fridge, toggleFridgeItem, 
       likedRecipes, addLikedRecipe, 
