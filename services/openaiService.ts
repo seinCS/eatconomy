@@ -202,7 +202,8 @@ ${sideRecipeSummary.map(r =>
 - 첫날(day 0)은 반드시 lunchRecipeId에 간편식 레시피 ID를 제공해야 합니다. (#초간단, #간단, #한그릇 태그) null로 설정하면 안 됩니다!
 - 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.
 - #면, #초간단 태그를 가진 메뉴는 isLeftoverSuitable=false로 설정하고, 다음날 점심이 필요한 경우 lunchRecipeId에 간편식 레시피 ID를 제공하세요.
-- 다른 날(day 1-6)은 일반적으로 lunchRecipeId를 null로 설정하고, 전날 저녁 leftovers를 사용합니다.`;
+- 다른 날(day 1-6)은 일반적으로 lunchRecipeId를 null로 설정하고, 전날 저녁 leftovers를 사용합니다.
+- **메인 요리 중복 방지**: 일주일(7일) 동안 저녁 메인 요리(mainRecipeId)는 되도록 겹치지 않도록 선택하세요. 각 날짜마다 다른 메인 요리를 선택하는 것이 이상적입니다.`;
 
   try {
     console.log('[OpenAI] API 호출 시작...');
@@ -334,6 +335,20 @@ ${sideRecipeSummary.map(r =>
     console.log('[OpenAI] Zod 스키마 검증 시작...');
     const validated = WeeklyPlanSchema.parse(parsedResponse);
     console.log('[OpenAI] Zod 스키마 검증 완료');
+
+    // 메인 요리 중복 검증
+    const mainRecipeIds = validated.dinnerPlans.map(dp => dp.mainRecipeId);
+    const duplicateMainIds = mainRecipeIds.filter((id, index) => mainRecipeIds.indexOf(id) !== index);
+    if (duplicateMainIds.length > 0) {
+      const uniqueDuplicates = [...new Set(duplicateMainIds)];
+      console.warn('[OpenAI] 메인 요리 중복 감지:', uniqueDuplicates.map(id => {
+        const recipe = mainCandidates.find(r => r.id === id);
+        return `${id}:${recipe?.name || '알 수 없음'}`;
+      }).join(', '));
+      // 중복이 있어도 계속 진행 (LLM이 다시 생성하도록 강제하지 않음)
+    } else {
+      console.log('[OpenAI] 메인 요리 중복 없음 - 모든 날짜에 다른 메인 요리 선택됨');
+    }
 
     // 7. WeeklyPlan 구조로 변환
     console.log('[OpenAI] WeeklyPlan 변환 시작...');

@@ -5,6 +5,7 @@ import { getSharedIngredients, getAlternativeRecipes, getAllRecipes } from '../s
 import { Clock, Link as LinkIcon, Info, Repeat, CheckCircle, TrendingUp, Flame, Leaf, Check, X, ShoppingCart } from 'lucide-react';
 import { Recipe, WeeklyPlan, DailyPlan } from '../types';
 import { useNavigate } from 'react-router-dom';
+import { motion, PanInfo } from 'framer-motion';
 
 interface SlotData {
     dailyPlan: DailyPlan;
@@ -12,6 +13,8 @@ interface SlotData {
     isMain: boolean; // 메인인지 반찬인지
     isSideFromStaple: boolean; // 고정 반찬에서 온 반찬인지
     sideRecipeId?: number; // 반찬 레시피 ID (고정 반찬 중 하나)
+    isLunch?: boolean; // 점심 메뉴인지 여부
+    lunchRecipe?: Recipe; // 점심 레시피 (점심 메뉴인 경우)
 }
 
 const PlanPage: React.FC = () => {
@@ -22,6 +25,10 @@ const PlanPage: React.FC = () => {
   // Re-roll state
   const [isReplacing, setIsReplacing] = useState(false);
   const [alternatives, setAlternatives] = useState<Recipe[]>([]);
+  
+  // Drag and drop state
+  const [draggedDay, setDraggedDay] = useState<number | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
 
   // --- Real-time Dashboard Logic ---
   const dashboardStats = useMemo(() => {
@@ -61,8 +68,16 @@ const PlanPage: React.FC = () => {
     return { savings, avgCalories, chainCount };
   }, [plannedRecipes]);
 
-  const handleRecipeClick = (dailyPlan: DailyPlan, day: number, isMain: boolean, isSideFromStaple: boolean = false, sideRecipeId?: number) => {
-    setSelectedSlot({ dailyPlan, day, isMain, isSideFromStaple, sideRecipeId });
+  const handleRecipeClick = (
+    dailyPlan: DailyPlan, 
+    day: number, 
+    isMain: boolean, 
+    isSideFromStaple: boolean = false, 
+    sideRecipeId?: number,
+    isLunch: boolean = false,
+    lunchRecipe?: Recipe
+  ) => {
+    setSelectedSlot({ dailyPlan, day, isMain, isSideFromStaple, sideRecipeId, isLunch, lunchRecipe });
     setIsReplacing(false); // Reset replace view
   };
 
@@ -78,7 +93,9 @@ const PlanPage: React.FC = () => {
   const getChainInfo = (day: number) => {
     if (!plannedRecipes || !selectedSlot) return { prevChain: [], nextChain: [] };
     
-    const currentRecipe = selectedSlot.isMain 
+    const currentRecipe = selectedSlot.isLunch && selectedSlot.lunchRecipe
+      ? selectedSlot.lunchRecipe
+      : selectedSlot.isMain 
       ? selectedSlot.dailyPlan.dinner.mainRecipe 
       : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId
           ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
@@ -103,7 +120,9 @@ const PlanPage: React.FC = () => {
       if (!selectedSlot || !plannedRecipes) return;
       
       const day = selectedSlot.day;
-      const currentRecipe = selectedSlot.isMain 
+      const currentRecipe = selectedSlot.isLunch && selectedSlot.lunchRecipe
+        ? selectedSlot.lunchRecipe
+        : selectedSlot.isMain 
         ? selectedSlot.dailyPlan.dinner.mainRecipe 
         : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId
             ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
@@ -113,16 +132,32 @@ const PlanPage: React.FC = () => {
       const prevDayPlan = day > 0 ? plannedRecipes.dailyPlans[day - 1] : null;
       const prevRecipe = prevDayPlan?.dinner?.mainRecipe || null;
       
-      // 같은 날 저녁 메인 (반찬 교체 시)
-      const otherSlotRecipe = selectedSlot.isMain ? null : selectedSlot.dailyPlan.dinner.mainRecipe;
+      // 같은 날 다른 슬롯 레시피 (반찬 교체 시 저녁 메인, 점심 교체 시 저녁 메인)
+      const otherSlotRecipe = selectedSlot.isLunch 
+        ? selectedSlot.dailyPlan.dinner.mainRecipe 
+        : selectedSlot.isMain 
+        ? null 
+        : selectedSlot.dailyPlan.dinner.mainRecipe;
 
       const all = getAllRecipes();
+      
+      // dishType 필터링: 메인은 main만, 반찬은 side만, 점심은 main만 (간편식)
+      let dishTypeFilter: 'main' | 'side' | undefined = undefined;
+      if (selectedSlot.isMain) {
+        dishTypeFilter = 'main';
+      } else if (selectedSlot.isSideFromStaple) {
+        dishTypeFilter = 'side';
+      } else if (selectedSlot.isLunch) {
+        dishTypeFilter = 'main'; // 점심은 간편식이므로 main 타입만
+      }
+      
       const candidates = getAlternativeRecipes(
           currentRecipe.id, 
           prevRecipe, 
           otherSlotRecipe, 
           all, 
-          dislikedRecipes
+          dislikedRecipes,
+          dishTypeFilter
       );
       
       setAlternatives(candidates);
@@ -135,19 +170,109 @@ const PlanPage: React.FC = () => {
       const day = selectedSlot.day;
       const dailyPlan = { ...plannedRecipes.dailyPlans[day] };
       
-      if (selectedSlot.isMain) {
+      if (selectedSlot.isLunch) {
+        // 점심 메뉴 교체
+        dailyPlan.lunch.type = 'COOK';
+        dailyPlan.lunch.recipe = newRecipe;
+        dailyPlan.lunch.targetRecipeId = undefined;
+        await updatePlan(day, dailyPlan);
+      } else if (selectedSlot.isMain) {
         // 메인 교체
         dailyPlan.dinner.mainRecipe = newRecipe;
-      } else if (selectedSlot.isSideFromStaple) {
-        // 고정 반찬 교체는 별도 처리 필요 (현재는 고정 반찬 교체 불가)
-        // TODO: 고정 반찬 교체 기능 추가 필요
-        console.warn('고정 반찬 교체는 아직 지원되지 않습니다.');
+        await updatePlan(day, dailyPlan);
+      } else if (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId) {
+        // 고정 반찬 교체
+        const newStapleSideDishes = plannedRecipes.stapleSideDishes.map(side => 
+          side.id === selectedSlot.sideRecipeId ? newRecipe : side
+        );
+        const newPlan: WeeklyPlan = {
+          ...plannedRecipes,
+          stapleSideDishes: newStapleSideDishes,
+        };
+        setPlannedRecipes(newPlan);
+        // localStorage에 저장
+        if (user) {
+          const { dbService } = await import('../services/dbService');
+          await dbService.saveWeeklyPlan(user.id, newPlan);
+        }
+        setSelectedSlot(null);
+        setIsReplacing(false);
         return;
       }
       
-      await updatePlan(day, dailyPlan);
       setSelectedSlot(null);
       setIsReplacing(false);
+  };
+
+  // 드래그 앤 드롭 핸들러
+  const handleDragStart = (day: number) => {
+    setDraggedDay(day);
+  };
+
+  const handleDragEnd = async (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo, sourceDay: number) => {
+    const dropDay = dragOverDay;
+    setDraggedDay(null);
+    setDragOverDay(null);
+    
+    if (!plannedRecipes || dropDay === null || dropDay === sourceDay) return;
+    
+    // 메뉴 교체
+    const sourcePlan = plannedRecipes.dailyPlans[sourceDay];
+    const targetPlan = plannedRecipes.dailyPlans[dropDay];
+    
+    if (sourcePlan.dinner.mainRecipe && targetPlan.dinner.mainRecipe) {
+      // 두 날짜의 메인 메뉴 교체
+      const newPlans = [...plannedRecipes.dailyPlans];
+      const tempMain = sourcePlan.dinner.mainRecipe;
+      newPlans[sourceDay] = {
+        ...sourcePlan,
+        dinner: {
+          ...sourcePlan.dinner,
+          mainRecipe: targetPlan.dinner.mainRecipe,
+        },
+      };
+      newPlans[dropDay] = {
+        ...targetPlan,
+        dinner: {
+          ...targetPlan.dinner,
+          mainRecipe: tempMain,
+        },
+      };
+      
+      const newPlan: WeeklyPlan = {
+        ...plannedRecipes,
+        dailyPlans: newPlans,
+      };
+      
+      setPlannedRecipes(newPlan);
+      
+      // 저장
+      if (user) {
+        try {
+          const { dbService } = await import('../services/dbService');
+          await dbService.saveWeeklyPlan(user.id, newPlan);
+          
+          // API에도 저장 (레거시)
+          const { apiService } = await import('../services/apiService');
+          const mainRecipes = newPlan.dailyPlans.map(dp => dp.dinner.mainRecipe);
+          await apiService.savePlan(user.id, mainRecipes);
+        } catch (error) {
+          console.error('[Plan] 드래그 앤 드롭 저장 실패:', error);
+          // 롤백
+          setPlannedRecipes(plannedRecipes);
+        }
+      }
+    }
+  };
+
+  const handleDragOver = (day: number) => {
+    if (draggedDay !== null && day !== draggedDay) {
+      setDragOverDay(day);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverDay(null);
   };
 
   if (!plannedRecipes) {
@@ -298,7 +423,7 @@ const PlanPage: React.FC = () => {
                           ? dailyPlan.lunch.recipe
                           : null;
                         if (targetRecipe) {
-                          handleRecipeClick(targetRecipe, dayIndex, false, false);
+                          handleRecipeClick(dailyPlan, dayIndex, false, false, undefined, true, targetRecipe);
                         }
                       }}
                     />
@@ -306,12 +431,23 @@ const PlanPage: React.FC = () => {
                 )}
 
                 {/* Dinner Slot (강조) */}
-                <div className="mt-2">
+                <div 
+                  className="mt-2"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    handleDragOver(dayIndex);
+                  }}
+                  onDragLeave={handleDragLeave}
+                >
                   <DinnerCard
                     dailyPlan={dailyPlan}
                     stapleSideDishes={plannedRecipes.stapleSideDishes}
                     onClickMain={() => dailyPlan.dinner.mainRecipe && handleRecipeClick(dailyPlan, dayIndex, true)}
                     onClickSide={(sideId) => handleRecipeClick(dailyPlan, dayIndex, false, true, sideId)}
+                    onDragStart={() => handleDragStart(dayIndex)}
+                    onDragEnd={(e, info) => handleDragEnd(e, info, dayIndex)}
+                    isDragging={draggedDay === dayIndex}
+                    isDragOver={dragOverDay === dayIndex}
                   />
                 </div>
               </div>
@@ -331,7 +467,9 @@ const PlanPage: React.FC = () => {
                             <div className="flex-1">
                                 <h2 className="text-xl font-bold mb-1">
                                     {(() => {
-                                      if (selectedSlot.isMain) {
+                                      if (selectedSlot.isLunch && selectedSlot.lunchRecipe) {
+                                        return selectedSlot.lunchRecipe.name;
+                                      } else if (selectedSlot.isMain) {
                                         return selectedSlot.dailyPlan.dinner.mainRecipe?.name || '메인 없음';
                                       } else if (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes) {
                                         const side = plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId);
@@ -341,7 +479,9 @@ const PlanPage: React.FC = () => {
                                     })()}
                                 </h2>
                                 {(() => {
-                                  const currentRecipe = selectedSlot.isMain 
+                                  const currentRecipe = selectedSlot.isLunch && selectedSlot.lunchRecipe
+                                    ? selectedSlot.lunchRecipe
+                                    : selectedSlot.isMain 
                                     ? selectedSlot.dailyPlan.dinner.mainRecipe 
                                     : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
                                         ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
@@ -368,7 +508,9 @@ const PlanPage: React.FC = () => {
 
                         {/* 재료 준비 상태 */}
                         {(() => {
-                            const currentRecipe = selectedSlot.isMain 
+                            const currentRecipe = selectedSlot.isLunch && selectedSlot.lunchRecipe
+                              ? selectedSlot.lunchRecipe
+                              : selectedSlot.isMain 
                               ? selectedSlot.dailyPlan.dinner.mainRecipe 
                               : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
                                   ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
@@ -469,7 +611,9 @@ const PlanPage: React.FC = () => {
 
                         {/* 태그 */}
                         {(() => {
-                          const currentRecipe = selectedSlot.isMain 
+                          const currentRecipe = selectedSlot.isLunch && selectedSlot.lunchRecipe
+                            ? selectedSlot.lunchRecipe
+                            : selectedSlot.isMain 
                             ? selectedSlot.dailyPlan.dinner.mainRecipe 
                             : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
                                 ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
@@ -633,7 +777,11 @@ const DinnerCard: React.FC<{
   stapleSideDishes: Recipe[];
   onClickMain: () => void;
   onClickSide: (sideId: number) => void;
-}> = ({ dailyPlan, stapleSideDishes, onClickMain, onClickSide }) => {
+  onDragStart: () => void;
+  onDragEnd: (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => void;
+  isDragging: boolean;
+  isDragOver: boolean;
+}> = ({ dailyPlan, stapleSideDishes, onClickMain, onClickSide, onDragStart, onDragEnd, isDragging, isDragOver }) => {
   if (!dailyPlan.dinner.mainRecipe) {
     return (
       <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl text-center text-gray-400 text-sm">
@@ -647,7 +795,21 @@ const DinnerCard: React.FC<{
     .filter((r): r is Recipe => r !== undefined);
 
   return (
-    <div className="bg-white p-4 rounded-xl shadow-md border-2 border-orange-100 space-y-3 relative z-10">
+    <motion.div 
+      className={`bg-white p-4 rounded-xl shadow-md border-2 space-y-3 relative z-10 transition-all ${
+        isDragOver 
+          ? 'border-orange-400 bg-orange-50' 
+          : isDragging 
+          ? 'border-orange-300 opacity-50' 
+          : 'border-orange-100'
+      }`}
+      drag="y"
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={0.2}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      whileDrag={{ scale: 1.05, zIndex: 50 }}
+    >
       {/* 저녁 메인 (강조) */}
       <div className="flex items-center gap-3 mb-2">
         <div className="absolute -top-2 -left-2 bg-orange-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
@@ -697,7 +859,7 @@ const DinnerCard: React.FC<{
           ))}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
 

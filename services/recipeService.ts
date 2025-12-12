@@ -91,7 +91,8 @@ export const getAlternativeRecipes = (
   prevRecipe: Recipe | null,
   otherSlotRecipe: Recipe | null, // Lunch if Dinner, Dinner if Lunch
   allRecipes: Recipe[],
-  dislikedRecipes: Recipe[]
+  dislikedRecipes: Recipe[],
+  dishTypeFilter?: 'main' | 'side' // 메인/반찬 필터링 옵션
 ): Recipe[] => {
   const dislikedIds = dislikedRecipes.map(r => r.id);
   const otherSlotId = otherSlotRecipe ? otherSlotRecipe.id : -1;
@@ -103,7 +104,12 @@ export const getAlternativeRecipes = (
     r.id !== otherSlotId
   );
 
-  // 2. Score candidates based on Chain Cooking (if prev exists)
+  // 2. dishType 필터링 (메인/반찬 구분)
+  if (dishTypeFilter) {
+    candidates = candidates.filter(r => r.dishType === dishTypeFilter);
+  }
+
+  // 3. Score candidates based on Chain Cooking (if prev exists)
   if (prevRecipe) {
     candidates = candidates.sort((a, b) => {
         const scoreA = getSharedIngredients(prevRecipe, a).length;
@@ -115,7 +121,7 @@ export const getAlternativeRecipes = (
     candidates = candidates.sort(() => 0.5 - Math.random());
   }
 
-  // 3. Return top 3 unique
+  // 4. Return top 3 unique
   return candidates.slice(0, 3);
 };
 
