@@ -37,8 +37,9 @@ eat-conomy/
 ├── services/
 │   ├── authService.ts         # 인증 서비스 (Mock)
 │   ├── dbService.ts           # 데이터베이스 서비스 (localStorage 기반)
-│   ├── recipeService.ts       # 레시피 로직 및 식단 생성 알고리즘
-│   └── geminiService.ts       # Gemini AI 연동 서비스
+│   ├── recipeService.ts       # 레시피 로직 및 식단 생성 알고리즘 (스코어링)
+│   ├── openaiService.ts       # OpenAI GPT-4o-mini 기반 LLM 식단 생성 서비스
+│   └── geminiService.ts       # Gemini AI 연동 서비스 (레시피 팁용)
 │
 └── test/
     ├── setup.ts               # 테스트 환경 설정
@@ -61,7 +62,9 @@ eat-conomy/
 | **애니메이션** | framer-motion | ^12.23.25 | 스와이프 카드 애니메이션 |
 | **아이콘** | lucide-react | ^0.556.0 | 아이콘 라이브러리 |
 | **차트** | recharts | ^3.5.1 | 통계 차트 (절약액) |
-| **AI SDK** | @google/genai | ^1.31.0 | Gemini API 클라이언트 |
+| **AI SDK** | @google/genai | ^1.31.0 | Gemini API 클라이언트 (레시피 팁용) |
+| **AI SDK** | openai | ^4.x | OpenAI GPT-4o-mini API 클라이언트 (식단 생성) |
+| **스키마 검증** | zod | ^3.x | LLM 응답 구조 검증 |
 | **테스트** | Vitest | ^3.2.4 | 단위/통합 테스트 프레임워크 |
 | **테스트 유틸** | @testing-library/react | ^16.3.0 | React 컴포넌트 테스트 |
 
@@ -97,11 +100,79 @@ eat-conomy/
 
 ### 2.1 AI 추천 알고리즘
 
-#### 2.1.1 선택(Selection) 로직
+현재 시스템은 **LLM 기반 식단 생성**을 사용하며, 기존 스코어링 알고리즘의 로직을 프롬프트에 반영하여 더 자연스럽고 맥락에 맞는 식단을 생성합니다.
+
+#### 2.1.1 LLM 기반 식단 생성 (현재 사용 중)
+
+**파일 위치**: `services/openaiService.ts`  
+**함수명**: `generateWeeklyPlanWithLLM()`  
+**반환 타입**: `MealSet[]` (14개 세트: 점심/저녁 × 7일)  
+**모델**: OpenAI GPT-4o-mini  
+**스키마 검증**: Zod (`WeeklyPlanSchema`)
+
+**처리 흐름**:
+
+1. **안전 필터링 (Hard Filter)**
+   ```typescript
+   // Line 56-75: services/openaiService.ts
+   ```
+   - 알러지 재료 포함 레시피 제외 (`preferences.allergies`)
+   - 싫어하는 재료 포함 레시피 제외 (`preferences.dislikedFoods`)
+   - 스와이프로 싫어요 선택한 레시피 제외 (`dislikedRecipes`)
+   - 필터링된 후보 레시피만 LLM에 제공
+
+2. **레시피 데이터베이스 요약 생성**
+   ```typescript
+   // Line 77-116: services/openaiService.ts
+   ```
+   - 각 레시피의 재료 매칭률 계산 (냉장고 재료 기준)
+   - `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 분류
+   - 좋아요 레시피 표시
+   - 간결한 형식으로 요약: `ID:이름(타입/식사타입,칼로리,매칭률%,좋아요)`
+
+3. **프롬프트 엔지니어링**
+   ```typescript
+   // Line 118-138: services/openaiService.ts
+   ```
+   - 기존 스코어링 알고리즘의 핵심 로직을 프롬프트에 반영:
+     - 재료 매칭률 우선 고려
+     - 좋아요 레시피 우선 선택
+     - 같은 날 재료 반복 최소화
+     - 다른 날 재료 연결 최대화
+     - 메인과 반찬 간의 어울림 고려
+     - 점심/저녁 적합성 고려
+   - 토큰 사용량 최적화를 위해 간결한 형식 사용
+
+4. **OpenAI API 호출 (Structured Output)**
+   ```typescript
+   // Line 145-200: services/openaiService.ts
+   ```
+   - `gpt-4o-mini` 모델 사용 (비용 효율적)
+   - JSON Schema를 사용한 구조화된 출력 보장
+   - `response_format: { type: 'json_schema', json_schema: ... }` 사용
+   - Zod 스키마로 응답 검증
+
+5. **응답 파싱 및 변환**
+   ```typescript
+   // Line 241-290: services/openaiService.ts
+   ```
+   - LLM 응답을 `MealSet[]` 구조로 변환
+   - 레시피 ID로 정확한 레시피 데이터 매칭
+   - 원본 레시피 데이터 유지 (메뉴명, 재료명 등 정확히 보존)
+   - 에러 처리 및 로깅
+
+**주요 특징**:
+- **토큰 효율성**: 간결한 프롬프트로 비용 최적화
+- **일관성 보장**: JSON Schema + Zod 검증으로 항상 올바른 형식 보장
+- **데이터 정확성**: 레시피 ID로 매칭하여 원본 데이터 정확히 유지
+- **에러 처리**: API 실패 시 명확한 에러 메시지 제공
+
+#### 2.1.2 스코어링 기반 알고리즘 (레거시, 현재 미사용)
 
 **파일 위치**: `services/recipeService.ts`  
 **함수명**: `generateScoredWeeklyPlan()`  
-**반환 타입**: `MealSet[]` (14개 세트: 점심/저녁 × 7일)
+**반환 타입**: `MealSet[]` (14개 세트: 점심/저녁 × 7일)  
+**상태**: 구현 완료, 현재는 LLM 기반 시스템 사용으로 인해 미사용
 
 **처리 흐름**:
 
@@ -158,14 +229,81 @@ eat-conomy/
    - 중복 레시피 방지 (`usedRecipeIds`)
    - 총 14개 MealSet 반환 (점심/저녁 × 7일)
 
-#### 2.1.2 알러지/비선호 필터링 단계
+#### 2.1.3 스코어링 알고리즘 상세 (레거시)
 
-**필터링 순서**:
-1. **레시피 메타데이터 자동 분류** (Line 8-55): dishType, mealType 자동 추가
-2. **1차 필터링** (Line 231-239): 알러지, 싫어하는 재료, 싫어하는 레시피 제외
-3. **점수 산정** (Line 241-266): 필터링된 후보들에 점수 부여
-4. **메인/반찬 분리** (Line 274-276): 메인음식과 반찬 풀 분리
-5. **슬롯별 선택** (Line 359-452): 개선된 알고리즘으로 각 슬롯에 맞는 레시피 선택
+**파일 위치**: `services/recipeService.ts`  
+**함수명**: `generateScoredWeeklyPlan()`  
+**상태**: 구현 완료, 현재 미사용 (LLM 기반 시스템 사용)
+
+**처리 흐름**:
+
+1. **레시피 메타데이터 자동 분류**
+   ```typescript
+   // Line 8-55: services/recipeService.ts
+   ```
+   - `enrichRecipeMetadata()`: 레시피에 `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 추가
+   - 태그와 칼로리 기반으로 자동 분류
+   - `ENRICHED_RECIPES`: 메타데이터가 추가된 레시피 목록
+
+2. **전처리 필터링 (Hard Filter)**
+   ```typescript
+   // Line 231-239: services/recipeService.ts
+   ```
+   - 알러지 재료 포함 레시피 제외 (`preferences.allergies`)
+   - 싫어하는 재료 포함 레시피 제외 (`preferences.dislikedFoods`)
+   - 스와이프로 싫어요 선택한 레시피 제외 (`dislikedRecipes`)
+
+3. **점수 산정 (Scoring)**
+   ```typescript
+   // Line 241-266: services/recipeService.ts
+   ```
+   - **재료 매칭 점수**: `(냉장고 재료 매칭 수 / 전체 재료 수) * 100`
+   - **부족 재료 페널티**: `부족한 재료 수 * 10`
+   - **좋아요 보너스**: 스와이프로 선택한 레시피 `+1000` (최우선 선택)
+
+4. **메인/반찬 분리**
+   ```typescript
+   // Line 274-276: services/recipeService.ts
+   ```
+   - 메인음식과 반찬을 별도 풀로 분리
+   - 각 식사에 메인+반찬 세트 구성
+
+5. **슬롯별 레시피 선택 (개선된 알고리즘)**
+   ```typescript
+   // Line 359-452: services/recipeService.ts - selectRecipeForSlot()
+   ```
+   - **하루 내 재료 반복 패널티**: 같은 날 이미 사용된 재료와 겹치면 `-30점/재료`
+   - **다른 날 재료 연결 보너스**: 이전 날 저녁과 재료가 겹치면 `+20점/재료`
+   - **점심/저녁 적합성**: 
+     - 점심: 가벼운 요리 우선 (칼로리 < 400 → +30점)
+     - 저녁: 든든한 요리 우선 (칼로리 > 500 → +30점)
+   - **mealType 매칭 보너스**: 정확히 맞는 타입이면 `+50점`
+   - 상위 5개 후보 중 랜덤 선택 (다양성 확보)
+
+6. **7일 식단 생성 (메인+반찬 세트)**
+   ```typescript
+   // Line 278-356: services/recipeService.ts
+   ```
+   - 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
+   - 날짜별 사용된 재료 추적 (`usedIngredientsByDay`)
+   - 중복 레시피 방지 (`usedRecipeIds`)
+   - 총 14개 MealSet 반환 (점심/저녁 × 7일)
+
+#### 2.1.4 알러지/비선호 필터링 단계
+
+**필터링 순서 (LLM 기반)**:
+1. **안전 필터링** (`services/openaiService.ts:56-75`): 알러지, 싫어하는 재료, 싫어하는 레시피 제외
+2. **레시피 데이터 요약** (`services/openaiService.ts:77-116`): 매칭률, 메타데이터, 좋아요 정보 포함
+3. **LLM 프롬프트 생성** (`services/openaiService.ts:118-138`): 기존 스코어링 로직을 프롬프트에 반영
+4. **OpenAI API 호출** (`services/openaiService.ts:145-200`): 구조화된 출력으로 식단 생성
+5. **응답 검증 및 변환** (`services/openaiService.ts:241-290`): Zod 스키마 검증 후 MealSet[] 변환
+
+**필터링 순서 (스코어링 기반, 레거시)**:
+1. **레시피 메타데이터 자동 분류** (`services/recipeService.ts:8-55`): dishType, mealType 자동 추가
+2. **1차 필터링** (`services/recipeService.ts:231-239`): 알러지, 싫어하는 재료, 싫어하는 레시피 제외
+3. **점수 산정** (`services/recipeService.ts:241-266`): 필터링된 후보들에 점수 부여
+4. **메인/반찬 분리** (`services/recipeService.ts:274-276`): 메인음식과 반찬 풀 분리
+5. **슬롯별 선택** (`services/recipeService.ts:359-452`): 개선된 알고리즘으로 각 슬롯에 맞는 레시피 선택
 6. **폴백 처리**: 필터링 후 후보가 없을 경우 안전한 풀 사용
 
 **안전성 보장**:
@@ -173,15 +311,41 @@ eat-conomy/
 - 싫어하는 재료는 점수 산정 전 제외
 - 폴백 시에도 알러지 체크 유지
 
-#### 2.1.3 점수 산정 방식 상세
+#### 2.1.5 LLM 프롬프트 규칙
+
+**프롬프트에 반영된 스코어링 로직** (`services/openaiService.ts:118-138`):
+
+1. **각 끼니 구성**: 메인 1개 + 반찬 1개(선택)
+2. **알러지 제외**: 사용자 알러지 재료 목록 명시
+3. **고려사항**: 
+   - 재료 매칭률 (냉장고 재료 기준)
+   - 좋아요 레시피 우선 선택
+4. **재료 전략**: 
+   - 같은 날 재료 반복 최소화
+   - 다른 날 재료 연결 최대화
+5. **어울림 고려**: 메인과 반찬 간의 어울림 정도가 높도록 구성
+6. **식사 시간대 적합성**: 점심과 저녁의 메인 메뉴는 일반적으로 사람들이 선호하는 메뉴 유형 고려
+
+**레시피 데이터 형식**:
+```
+ID:이름(메인/반찬/점심/저녁,칼로리kcal,매칭률%,좋아요)
+예: 101:돼지고기 김치찌개(main/both,450kcal,매칭60%,좋아요)
+```
+
+**입력 데이터**:
+- 냉장고 재료 목록
+- 좋아요 레시피 ID 목록
+- 싫어요 레시피 ID 목록
+- 알러지 재료 목록
+
+#### 2.1.6 스코어링 알고리즘 점수 산정 방식 (레거시)
 
 **기본 점수 공식**:
 ```
-기본점수 = 재료매칭점수 - 부족재료페널티 - 맵기페널티 + 좋아요보너스
+기본점수 = 재료매칭점수 - 부족재료페널티 + 좋아요보너스
 
 재료매칭점수 = (냉장고에 있는 재료 수 / 전체 재료 수) * 100
 부족재료페널티 = 부족한 재료 수 * 10
-맵기페널티 = 사용자가 순한맛(1)이고 레시피가 매운 경우 50점
 좋아요보너스 = 스와이프로 선택한 레시피인 경우 1000점
 ```
 
@@ -436,8 +600,8 @@ interface User {
 | 기능 | 상태 | 구현 위치 | 비고 |
 |------|------|-----------|------|
 | 스와이프 선호도 조사 | ✅ 완료 | `pages/Swipe.tsx` | 10개 레시피 스와이프 |
-| AI 식단 생성 (Scored) | ✅ 완료 | `services/recipeService.ts:206-357` | 메인+반찬 세트 알고리즘 (v1.2.0) |
-| AI 식단 생성 (LLM) | ⚠️ 부분완료 | `services/geminiService.ts:53-190` | 구현됐으나 현재 미사용 |
+| AI 식단 생성 (LLM) | ✅ 완료 | `services/openaiService.ts` | OpenAI GPT-4o-mini 기반 (현재 사용 중) |
+| AI 식단 생성 (Scored) | ✅ 완료 | `services/recipeService.ts:206-357` | 스코어링 알고리즘 (레거시, 현재 미사용) |
 | 식단표 표시 | ✅ 완료 | `pages/Plan.tsx` | 주간 타임라인 뷰 (메인+반찬 표시) |
 | 레시피 상세 보기 | ✅ 완료 | `pages/Plan.tsx:54-126` | 모달 형태 (메인/반찬 구분) |
 | AI 레시피 팁 | ✅ 완료 | `services/geminiService.ts:15-45` | Gemini API 연동 |
@@ -446,7 +610,8 @@ interface User {
 | 실시간 대시보드 | ✅ 완료 | `pages/Plan.tsx:23-52` | 절약액, 칼로리, 체인 카운트 |
 
 **제약사항**:
-- LLM 기반 식단 생성은 구현되어 있으나 비용 절감을 위해 미사용
+- OpenAI API 키 필요 (`VITE_OPENAI_API_KEY` 환경 변수)
+- API 호출 비용 발생 (GPT-4o-mini 사용으로 비용 최적화)
 - 이미지 매핑: `picsum.photos` 사용 (실제 레시피 이미지 없음)
 
 ### 4.4 장보기 목록 (List)
@@ -642,15 +807,15 @@ interface User {
     ↓
 [Swipe.tsx: finishSwiping()]
     ↓
-[App.tsx: generatePlan()]
+[App.tsx: generateAIPlan()] → [App.tsx: generatePlan(useLLM=true)]
     ↓
-[recipeService.ts: generateScoredWeeklyPlan()]
-    ├─→ [레시피 메타데이터 자동 분류: dishType, mealType]
-    ├─→ [필터링: 알러지/비선호 제외]
-    ├─→ [점수 산정: 재료 매칭 + 보너스]
-    ├─→ [메인/반찬 분리]
-    ├─→ [슬롯별 선택: 하루 내 반복 패널티, 다른 날 연결 보너스]
-    └─→ [선택: 14개 MealSet (메인+반찬 × 7일)]
+[openaiService.ts: generateWeeklyPlanWithLLM()]
+    ├─→ [안전 필터링: 알러지/비선호 제외]
+    ├─→ [레시피 데이터 요약: 매칭률, 메타데이터, 좋아요 정보]
+    ├─→ [프롬프트 생성: 기존 스코어링 로직 반영]
+    ├─→ [OpenAI API 호출: GPT-4o-mini, JSON Schema]
+    ├─→ [응답 검증: Zod 스키마로 검증]
+    └─→ [변환: MealSet[] 구조로 변환 (14개 세트)]
     ↓
 [App.tsx: setPlannedRecipes(mealSets)]
     ↓
@@ -658,6 +823,8 @@ interface User {
     ↓
 [UI 업데이트: Plan 페이지로 이동]
 ```
+
+**참고**: 스코어링 알고리즘(`generateScoredWeeklyPlan`)은 구현되어 있으나 현재는 LLM 기반 시스템을 사용합니다.
 
 ---
 
@@ -667,9 +834,18 @@ interface User {
 
 `.env.local` 파일 생성 필요:
 ```bash
+# OpenAI API 키 (식단 생성용, 필수)
+VITE_OPENAI_API_KEY=your_openai_api_key_here
+
+# Gemini API 키 (레시피 팁용, 선택)
 VITE_GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here  # Fallback
 ```
+
+**환경 변수 설정 방법**:
+- **Vercel**: 프로젝트 Settings → Environment Variables에서 추가
+- **Railway**: 프로젝트 Variables 탭에서 추가
+- **로컬 개발**: `.env.local` 파일에 추가 (Git에 커밋하지 않음)
 
 ### 7.2 실행 명령어
 
@@ -732,14 +908,25 @@ npm run test:ui
 
 ## 9. v1.2.0 주요 변경사항 요약
 
-### 9.1 식단 추천 시스템 고도화
+### 9.1 LLM 기반 식단 추천 시스템 도입
+
+- **OpenAI GPT-4o-mini 통합**: 기존 스코어링 알고리즘을 LLM 기반 시스템으로 전환
+- **Structured Output**: JSON Schema + Zod 검증으로 일관된 형식 보장
+- **프롬프트 엔지니어링**: 기존 스코어링 로직의 핵심 요소를 프롬프트에 반영
+  - 재료 매칭률 우선 고려
+  - 좋아요 레시피 우선 선택
+  - 같은 날 재료 반복 최소화
+  - 다른 날 재료 연결 최대화
+  - 메인과 반찬 간의 어울림 고려
+  - 점심/저녁 적합성 고려
+- **토큰 최적화**: 간결한 프롬프트 형식으로 비용 효율성 확보
+- **에러 처리**: API 실패 시 명확한 에러 메시지 및 로깅
+
+### 9.2 식단 추천 시스템 고도화
 
 - **메인+반찬 세트 구성**: 각 식사에 메인음식 1개와 반찬 1개가 함께 추천됩니다
 - **레시피 메타데이터 자동 분류**: `dishType`(메인/반찬), `mealType`(점심/저녁) 자동 추가
-- **개선된 알고리즘**:
-  - 하루 내 재료 반복 패널티: 같은 날 재료 중복 사용 시 -30점/재료
-  - 다른 날 재료 연결 보너스: 이전 날 저녁과 재료 연결 시 +20점/재료
-  - 점심/저녁 적합성: 점심은 가벼운 요리, 저녁은 든든한 요리 우선 추천
+- **LLM 기반 추천**: 기존 스코어링 알고리즘의 로직을 프롬프트에 반영하여 더 자연스러운 식단 생성
 
 ### 9.2 타입 시스템 개선
 
@@ -753,19 +940,53 @@ npm run test:ui
 - **홈 화면 오늘의 식단**: 메인음식과 반찬 모두 표시
 - **냉장고 페이지**: 사용률 낮은 "이 재료로 추천받기" 버튼 제거
 
-### 9.4 알고리즘 상세
+### 9.4 LLM 기반 알고리즘 상세
 
-**슬롯별 레시피 선택 로직** (`selectRecipeForSlot`):
+**LLM 식단 생성 프로세스** (`generateWeeklyPlanWithLLM`):
+
+1. **안전 필터링**:
+   - 알러지 재료 포함 레시피 제외
+   - 싫어하는 재료 포함 레시피 제외
+   - 스와이프로 싫어요 선택한 레시피 제외
+
+2. **레시피 데이터 요약 생성**:
+   - 재료 매칭률 계산 (냉장고 재료 기준)
+   - `dishType`, `mealType` 자동 분류
+   - 좋아요 레시피 표시
+   - 간결한 형식으로 요약
+
+3. **프롬프트 생성**:
+   - 기존 스코어링 알고리즘의 핵심 로직을 프롬프트에 반영
+   - 토큰 사용량 최적화를 위해 간결한 형식 사용
+
+4. **OpenAI API 호출**:
+   - 모델: `gpt-4o-mini` (비용 효율적)
+   - Structured Output: JSON Schema 사용
+   - 응답 형식: 14개 식사 (day: 0-6, mealType: lunch/dinner, mainRecipeId, sideRecipeId, reasoning)
+
+5. **응답 검증 및 변환**:
+   - Zod 스키마로 응답 검증
+   - 레시피 ID로 정확한 레시피 데이터 매칭
+   - `MealSet[]` 구조로 변환 (14개 세트)
+
+**7일 식단 생성 결과**:
+- 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
+- LLM이 재료 연결성과 어울림을 고려하여 자동으로 구성
+- 총 14개 MealSet 반환 (점심/저녁 × 7일)
+
+### 9.5 스코어링 알고리즘 상세 (레거시)
+
+**슬롯별 레시피 선택 로직** (`selectRecipeForSlot`, 현재 미사용):
 1. 사용되지 않은 레시피 필터링
 2. 점심/저녁 적합성 필터링
 3. 점수 계산:
-   - 기본 점수 (재료 매칭, 부족 페널티, 맵기 페널티, 좋아요 보너스)
+   - 기본 점수 (재료 매칭, 부족 페널티, 좋아요 보너스)
    - 하루 내 재료 반복 패널티 (-30점/재료)
    - 다른 날 재료 연결 보너스 (+20점/재료)
    - 점심/저녁 적합성 보너스 (+30~50점)
 4. 상위 5개 후보 중 랜덤 선택
 
-**7일 식단 생성 프로세스**:
+**7일 식단 생성 프로세스** (레거시):
 - 각 날짜별로 점심 메인+반찬, 저녁 메인+반찬 세트 생성
 - 날짜별 사용된 재료 추적 (`usedIngredientsByDay`)
 - 중복 레시피 방지 (`usedRecipeIds`)
