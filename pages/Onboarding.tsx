@@ -16,9 +16,6 @@ const OnboardingPage: React.FC = () => {
   const [cookingSkill, setCookingSkill] = useState<string>('Beginner');
   const [isSaving, setIsSaving] = useState(false);
 
-  // 최소 1개 이상 선택했는지 확인 (알러지 또는 싫어하는 음식 중 하나라도 선택)
-  const canContinue = allergies.length > 0 || dislikedFoods.length > 0;
-
   const toggleTag = (tag: string, list: string[], setList: (v: string[]) => void) => {
     if (list.includes(tag)) {
       setList(list.filter(t => t !== tag));
@@ -28,7 +25,6 @@ const OnboardingPage: React.FC = () => {
   };
 
   const handleContinue = async () => {
-    if (!canContinue) return;
     if (!user) return;
 
     setIsSaving(true);
@@ -57,7 +53,7 @@ const OnboardingPage: React.FC = () => {
       {/* Header */}
       <div className="bg-white px-6 py-6 text-center border-b border-gray-100">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">선호도 설정</h1>
-        <p className="text-gray-500 text-sm">맞춤형 식단 추천을 위해 선호도를 알려주세요</p>
+        <p className="text-gray-500 text-sm">맞춤형 식단 추천을 위해 선호도를 알려주세요 (선택사항)</p>
       </div>
 
       <div className="px-6 py-6 pb-32">
@@ -67,7 +63,7 @@ const OnboardingPage: React.FC = () => {
             <AlertCircle className="w-5 h-5 text-red-500" />
             <h2 className="text-lg font-bold text-gray-900">알러지 / 못 먹는 재료</h2>
           </div>
-          <p className="text-xs text-gray-500 mb-4">선택한 재료는 절대 추천되지 않습니다</p>
+          <p className="text-xs text-gray-500 mb-4">선택한 재료는 절대 추천되지 않습니다 (선택사항)</p>
           <div className="flex flex-wrap gap-2">
             {COMMON_ALLERGENS.map(item => {
               const isSelected = allergies.includes(item);
@@ -94,7 +90,7 @@ const OnboardingPage: React.FC = () => {
             <TrendingUp className="w-5 h-5 text-gray-600" />
             <h2 className="text-lg font-bold text-gray-900">싫어하는 음식</h2>
           </div>
-          <p className="text-xs text-gray-500 mb-4">선택한 재료는 가능한 한 피해서 추천됩니다</p>
+          <p className="text-xs text-gray-500 mb-4">선택한 재료는 가능한 한 피해서 추천됩니다 (선택사항)</p>
           <div className="flex flex-wrap gap-2">
             {COMMON_DISLIKED_FOODS.map(item => {
               const isSelected = dislikedFoods.includes(item);
@@ -160,20 +156,15 @@ const OnboardingPage: React.FC = () => {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-6">
         <button
           onClick={handleContinue}
-          disabled={!canContinue || isSaving}
+          disabled={isSaving}
           className={`w-full py-4 rounded-xl font-bold text-white transition-all ${
-            canContinue && !isSaving
+            !isSaving
               ? 'bg-orange-500 hover:bg-orange-600 shadow-lg active:scale-95'
               : 'bg-gray-300 cursor-not-allowed'
           }`}
         >
           {isSaving ? '저장 중...' : '계속하기'}
         </button>
-        {!canContinue && (
-          <p className="text-xs text-gray-400 text-center mt-2">
-            최소 1개 이상 선택해주세요
-          </p>
-        )}
       </div>
     </div>
   );
