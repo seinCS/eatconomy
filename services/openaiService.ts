@@ -35,6 +35,9 @@ const WeeklyPlanSchema = z.object({
       mainRecipeId: z.number().int(),
       recommendedSideDishIds: z.array(z.number().int()).min(1).max(2), // 고정 반찬 중 추천
       reasoning: z.string().describe('이 메뉴를 선택한 이유'),
+      // 점심 처리 정보
+      lunchRecipeId: z.number().int().nullable().optional().describe('첫날(day 0) 점심 간편식 레시피 ID, 또는 재가열 불가능한 메뉴일 경우 간편식 레시피 ID'),
+      isLeftoverSuitable: z.boolean().optional().describe('이 저녁 메뉴가 다음날 점심 leftovers로 적합한지 여부 (라면, 면 요리 등은 false)'),
     })
   ).length(7), // 정확히 7개 (저녁만)
 });
@@ -131,11 +134,14 @@ export const generateWeeklyPlanWithLLM = async (
 
 Objective:
 1. 사용자의 냉장고 재료를 최대한 활용할 것
-2. [Cook Once, Eat Twice]: 저녁 메뉴는 2인분 기준으로 요리하여, 다음 날 점심까지 먹는 것을 기본으로 한다. (따라서 점심 메뉴는 별도로 추천하지 않고 저녁 메뉴와 동일하게 설정한다)
+2. [Cook Once, Eat Twice]: 저녁 메뉴는 2인분 기준으로 요리하되, 재가열 가능한 메뉴만 다음날 점심 leftovers로 사용한다.
+   - 재가열 적합: 찌개, 국물, 볶음, 조림 등 (#국물, #볶음, #조림 태그)
+   - 재가열 부적합: 라면, 면 요리, 초간단 요리 등 (#면, #초간단 태그) → 다음날 점심은 간편식 추천
 3. [Weekly Banchan]: 일주일 동안 두고 먹을 수 있는 '밑반찬' 3-4가지를 먼저 선정한다. 반찬은 #반찬, #볶음, #무침, #조림 태그를 가진 레시피 중에서 선택한다.
 4. [Harmony]: 메인 요리가 '국물/찌개' (#국물 태그)라면 밑반찬은 눅눅해지지 않는 '볶음/무침/조림'류로 구성한다. 국+국 조합은 절대 금지다.
-5. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
-6. 고려사항: 재료매칭률, 좋아요 레시피 우선 선택
+5. [첫날 점심]: 첫날(월요일) 점심은 간편식 레시피를 추천한다 (#초간단, #간단, #한그릇 태그).
+6. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
+7. 고려사항: 재료매칭률, 좋아요 레시피 우선 선택
 
 레시피 DB:
 ${recipeDbSummary.map(r => 
@@ -148,9 +154,14 @@ ${recipeDbSummary.map(r =>
 
 출력 형식:
 1. stapleSideDishes: 주간 고정 반찬 3-4개 (recipeId, reasoning)
-2. dinnerPlans: 저녁 메뉴 7개 (day:0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning)
+2. dinnerPlans: 저녁 메뉴 7개 (day:0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning, lunchRecipeId, isLeftoverSuitable)
+   - lunchRecipeId: 첫날(day 0)이거나 재가열 불가능한 메뉴일 경우 간편식 레시피 ID, 그 외는 null
+   - isLeftoverSuitable: 이 저녁 메뉴가 다음날 점심 leftovers로 적합한지 (라면, 면 요리 등은 false)
 
-중요: 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.`;
+중요: 
+- 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.
+- #면, #초간단 태그를 가진 메뉴는 isLeftoverSuitable=false로 설정하고, lunchRecipeId에 간편식 레시피 ID를 제공하세요.
+- 첫날(day 0)은 반드시 lunchRecipeId에 간편식 레시피 ID를 제공하세요.`;
 
   try {
     console.log('[OpenAI] API 호출 시작...');
@@ -207,8 +218,16 @@ ${recipeDbSummary.map(r =>
                       maxItems: 2,
                     },
                     reasoning: { type: 'string' },
+                    lunchRecipeId: { 
+                      type: ['integer', 'null'],
+                      description: '첫날(day 0) 점심 간편식 레시피 ID, 또는 재가열 불가능한 메뉴일 경우 간편식 레시피 ID'
+                    },
+                    isLeftoverSuitable: { 
+                      type: 'boolean',
+                      description: '이 저녁 메뉴가 다음날 점심 leftovers로 적합한지 여부'
+                    },
                   },
-                  required: ['day', 'mainRecipeId', 'recommendedSideDishIds', 'reasoning'],
+                  required: ['day', 'mainRecipeId', 'recommendedSideDishIds', 'reasoning', 'lunchRecipeId', 'isLeftoverSuitable'],
                   additionalProperties: false,
                 },
                 minItems: 7,
@@ -308,20 +327,60 @@ ${recipeDbSummary.map(r =>
         .map(id => stapleSideDishes.find(s => s.id === id))
         .filter((r): r is Recipe => r !== undefined);
 
-      // 점심: 전날 저녁 leftovers (첫날 제외)
-      const lunchType = dinnerPlan.day === 0 ? 'COOK' : 'LEFTOVER';
-      const previousDayDinner = dinnerPlan.day > 0 
-        ? validated.dinnerPlans.find(p => p.day === dinnerPlan.day - 1)
-        : null;
+      // 점심 처리 로직
+      let lunchType: 'LEFTOVER' | 'COOK' | 'EAT_OUT' = 'LEFTOVER';
+      let lunchRecipe: Recipe | undefined = undefined;
+      let targetRecipeId: number | undefined = undefined;
+
+      if (dinnerPlan.day === 0) {
+        // 첫날: 간편식 레시피 추천
+        lunchType = 'COOK';
+        if (dinnerPlan.lunchRecipeId) {
+          const lunchRecipeCandidate = SEED_RECIPES.find(r => r.id === dinnerPlan.lunchRecipeId);
+          if (lunchRecipeCandidate) {
+            lunchRecipe = lunchRecipeCandidate;
+          }
+        }
+      } else {
+        // 다른 날: 전날 저녁 leftovers 또는 간편식
+        const previousDayDinner = validated.dinnerPlans.find(p => p.day === dinnerPlan.day - 1);
+        if (previousDayDinner && previousDayDinner.isLeftoverSuitable !== false) {
+          // 전날 저녁이 leftovers 적합하면 leftovers 사용
+          lunchType = 'LEFTOVER';
+          targetRecipeId = previousDayDinner.mainRecipeId;
+        } else {
+          // 전날 저녁이 leftovers 부적합하거나 lunchRecipeId가 제공된 경우 간편식 사용
+          lunchType = 'COOK';
+          if (dinnerPlan.lunchRecipeId) {
+            const lunchRecipeCandidate = SEED_RECIPES.find(r => r.id === dinnerPlan.lunchRecipeId);
+            if (lunchRecipeCandidate) {
+              lunchRecipe = lunchRecipeCandidate;
+            }
+          } else if (previousDayDinner) {
+            // lunchRecipeId가 없으면 전날 저녁 메인을 사용 (폴백)
+            targetRecipeId = previousDayDinner.mainRecipeId;
+            lunchType = 'LEFTOVER';
+          }
+        }
+      }
+
+      // lunchRecipe가 없으면 간편식 레시피 자동 선택 (폴백)
+      if (lunchType === 'COOK' && !lunchRecipe) {
+        const simpleMeals = candidateRecipes.filter(r => 
+          r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
+          r.calories < 500
+        );
+        if (simpleMeals.length > 0) {
+          lunchRecipe = simpleMeals[0];
+        }
+      }
 
       dailyPlans.push({
         day: dinnerPlan.day,
         lunch: {
           type: lunchType,
-          targetRecipeId: lunchType === 'LEFTOVER' && previousDayDinner 
-            ? previousDayDinner.mainRecipeId 
-            : undefined,
-          recipe: lunchType === 'COOK' ? undefined : undefined, // 간편식은 나중에 처리
+          targetRecipeId: lunchType === 'LEFTOVER' ? targetRecipeId : undefined,
+          recipe: lunchType === 'COOK' ? lunchRecipe : undefined,
         },
         dinner: {
           mainRecipe: {
@@ -371,10 +430,39 @@ ${recipeDbSummary.map(r =>
         );
         if (availableMains.length > 0) {
           const fallback = availableMains[0];
+          
+          // 점심 처리 (폴백)
+          let lunchType: 'LEFTOVER' | 'COOK' | 'EAT_OUT' = day === 0 ? 'COOK' : 'LEFTOVER';
+          let lunchRecipe: Recipe | undefined = undefined;
+          let targetRecipeId: number | undefined = undefined;
+          
+          if (day === 0) {
+            // 첫날: 간편식
+            const simpleMeals = candidateRecipes.filter(r => 
+              !usedRecipeIds.has(r.id) &&
+              r.tags.some(t => t.includes('#초간단') || t.includes('#간단') || t.includes('#한그릇')) &&
+              r.calories < 500
+            );
+            if (simpleMeals.length > 0) {
+              lunchRecipe = simpleMeals[0];
+              usedRecipeIds.add(lunchRecipe.id);
+            }
+          } else {
+            // 다른 날: 전날 저녁 leftovers
+            const prevDayPlan = dailyPlans.find(dp => dp.day === day - 1);
+            if (prevDayPlan?.dinner?.mainRecipe) {
+              targetRecipeId = prevDayPlan.dinner.mainRecipe.id;
+            }
+          }
+          
           if (!existingPlan) {
             dailyPlans.push({
               day,
-              lunch: { type: day === 0 ? 'COOK' : 'LEFTOVER', targetRecipeId: day > 0 ? validated.dinnerPlans.find(p => p.day === day - 1)?.mainRecipeId : undefined },
+              lunch: {
+                type: lunchType,
+                targetRecipeId: lunchType === 'LEFTOVER' ? targetRecipeId : undefined,
+                recipe: lunchType === 'COOK' ? lunchRecipe : undefined,
+              },
               dinner: {
                 mainRecipe: fallback,
                 recommendedSideDishIds: stapleSideDishes.slice(0, 1).map(s => s.id),
@@ -384,6 +472,14 @@ ${recipeDbSummary.map(r =>
             existingPlan.dinner.mainRecipe = fallback;
             if (existingPlan.dinner.recommendedSideDishIds.length === 0) {
               existingPlan.dinner.recommendedSideDishIds = stapleSideDishes.slice(0, 1).map(s => s.id);
+            }
+            // 점심도 업데이트
+            if (!existingPlan.lunch.recipe && lunchType === 'COOK' && lunchRecipe) {
+              existingPlan.lunch.type = 'COOK';
+              existingPlan.lunch.recipe = lunchRecipe;
+            } else if (lunchType === 'LEFTOVER' && targetRecipeId) {
+              existingPlan.lunch.type = 'LEFTOVER';
+              existingPlan.lunch.targetRecipeId = targetRecipeId;
             }
           }
           usedRecipeIds.add(fallback.id);
