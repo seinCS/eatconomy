@@ -83,7 +83,8 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/login" state={{ from: routeLocation }} replace />;
   }
 
-  // 온보딩 미완료 시 온보딩 페이지로 리다이렉트 (온보딩 페이지 자체는 제외)
+  // 데이터 로딩이 완료된 후에만 온보딩 체크 수행
+  // preferences가 undefined이고 데이터 로딩이 완료되었을 때만 온보딩 페이지로 리다이렉트
   if (!preferences && routeLocation.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }
@@ -113,7 +114,8 @@ const OnboardingRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/login" state={{ from: routeLocation }} replace />;
   }
 
-  // 온보딩 완료 시 홈으로 리다이렉트
+  // 데이터 로딩이 완료된 후에만 온보딩 완료 체크 수행
+  // preferences가 있고 데이터 로딩이 완료되었을 때만 홈으로 리다이렉트
   if (preferences) {
     return <Navigate to="/" replace />;
   }
