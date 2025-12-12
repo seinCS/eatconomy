@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { Recipe, UserPreferences, MealSet } from '../types';
+import { Recipe, UserPreferences, MealSet, WeeklyPlan, DailyPlan } from '../types';
 import { SEED_RECIPES, STAPLES } from '../constants';
 
 /// <reference types="vite/client" />
@@ -17,32 +17,42 @@ const getApiKey = (): string | undefined => {
 };
 
 /**
- * Zod 스키마: 주간 식단표 구조 (MealSet[])
+ * Zod 스키마: 주간 식단표 구조 (1 Cook, 2 Eat 모델)
  */
 const WeeklyPlanSchema = z.object({
-  weeklyPlan: z.array(
+  // 이번 주 고정 반찬 (일주일 내내 먹을 것)
+  stapleSideDishes: z.array(
+    z.object({
+      recipeId: z.number().int(),
+      reasoning: z.string().describe('이 반찬을 선택한 이유'),
+    })
+  ).min(3).max(4),
+  
+  // 일자별 저녁 메뉴 (7일)
+  dinnerPlans: z.array(
     z.object({
       day: z.number().int().min(0).max(6), // 0=월요일, 6=일요일
-      mealType: z.enum(['lunch', 'dinner']),
       mainRecipeId: z.number().int(),
-      sideRecipeId: z.number().int().nullable().optional(), // optional로 처리
+      recommendedSideDishIds: z.array(z.number().int()).min(1).max(2), // 고정 반찬 중 추천
       reasoning: z.string().describe('이 메뉴를 선택한 이유'),
     })
-  ).length(14), // 정확히 14개 (7일 × 2끼)
+  ).length(7), // 정확히 7개 (저녁만)
 });
 
 type WeeklyPlanResponse = z.infer<typeof WeeklyPlanSchema>;
 
 /**
- * LLM 기반 주간 식단 생성 (메인+반찬 세트)
- * 기존 스코어링 알고리즘의 로직을 프롬프트에 반영
+ * LLM 기반 주간 식단 생성 (1 Cook, 2 Eat 모델)
+ * - 저녁 메뉴 7개 추천
+ * - 주간 고정 반찬 3-4개 추천
+ * - 점심은 전날 저녁 leftovers 또는 간편식
  */
 export const generateWeeklyPlanWithLLM = async (
   fridgeItems: string[],
   preferences: UserPreferences | undefined,
   dislikedRecipes: Recipe[],
   likedRecipes: Recipe[]
-): Promise<MealSet[]> => {
+): Promise<WeeklyPlan> => {
   const apiKey = getApiKey();
   if (!apiKey) {
     throw new Error('OpenAI API Key not found. Please set VITE_OPENAI_API_KEY in .env');
@@ -108,6 +118,7 @@ export const generateWeeklyPlanWithLLM = async (
       calories: r.calories,
       matchRatio: Math.round(matchRatio),
       isLiked: likedIds.includes(r.id),
+      tags: r.tags, // 태그 정보 추가 (국물/반찬 구분용)
     };
   }).sort((a, b) => {
     if (a.isLiked && !b.isLiked) return -1;
@@ -115,27 +126,31 @@ export const generateWeeklyPlanWithLLM = async (
     return b.matchRatio - a.matchRatio;
   });
 
-  // 3. 간결한 시스템 프롬프트
-  const systemPrompt = `7일 식단표 생성 (14끼: 점심/저녁 × 7일). 레시피 DB에서만 선택하세요.
+  // 3. 자취생 멘토 페르소나 프롬프트
+  const systemPrompt = `Role: 당신은 '최소한의 노동으로 그럴듯하게 먹고 사는' 10년 차 프로 자취러입니다.
 
-규칙:
-1. 각 끼니: 메인 1개 + 반찬 1개(선택)
-2. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
-3. 고려사항: 재료매칭률, 좋아요 레시피
-4. 재료 전략: 같은 날 반복 최소화, 다른 날 연결 최대화
-5. 메인과 반찬 간의 어울림 정도가 높도록 식단 구성
-6. 점심과 저녁의 메인 메뉴는 일반적으로 사람들이 선호하는 메뉴 유형을 고려하여 구성
+Objective:
+1. 사용자의 냉장고 재료를 최대한 활용할 것
+2. [Cook Once, Eat Twice]: 저녁 메뉴는 2인분 기준으로 요리하여, 다음 날 점심까지 먹는 것을 기본으로 한다. (따라서 점심 메뉴는 별도로 추천하지 않고 저녁 메뉴와 동일하게 설정한다)
+3. [Weekly Banchan]: 일주일 동안 두고 먹을 수 있는 '밑반찬' 3-4가지를 먼저 선정한다. 반찬은 #반찬, #볶음, #무침, #조림 태그를 가진 레시피 중에서 선택한다.
+4. [Harmony]: 메인 요리가 '국물/찌개' (#국물 태그)라면 밑반찬은 눅눅해지지 않는 '볶음/무침/조림'류로 구성한다. 국+국 조합은 절대 금지다.
+5. 알러지 제외: ${allergenList.length > 0 ? allergenList.join(', ') : '없음'}
+6. 고려사항: 재료매칭률, 좋아요 레시피 우선 선택
 
 레시피 DB:
 ${recipeDbSummary.map(r => 
-  `${r.id}:${r.name}(${r.dishType}/${r.mealType},${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''})`
+  `${r.id}:${r.name}(${r.dishType}/${r.mealType},${r.calories}kcal,매칭${r.matchRatio}%${r.isLiked ? ',좋아요' : ''},태그:${r.tags?.join('/') || ''})`
 ).join(' ')}
 
 냉장고: ${fridgeItems.join(',')}
 좋아요ID: ${likedIds.length > 0 ? likedIds.join(',') : '없음'}
 싫어요ID: ${dislikedIds.length > 0 ? dislikedIds.join(',') : '없음'}
 
-출력: 14개 식사(day:0-6, mealType:lunch/dinner, mainRecipeId, sideRecipeId, reasoning)`;
+출력 형식:
+1. stapleSideDishes: 주간 고정 반찬 3-4개 (recipeId, reasoning)
+2. dinnerPlans: 저녁 메뉴 7개 (day:0-6, mainRecipeId, recommendedSideDishIds: 고정 반찬 중 1-2개, reasoning)
+
+중요: 메인이 #국물 태그를 가지면, 반찬은 #국물 태그가 없는 것만 추천하세요.`;
 
   try {
     console.log('[OpenAI] API 호출 시작...');
@@ -153,7 +168,7 @@ ${recipeDbSummary.map(r =>
         },
         {
           role: 'user',
-          content: '14개 식사 생성 (day:0-6, mealType:lunch/dinner, mainRecipeId, sideRecipeId, reasoning)',
+          content: '주간 고정 반찬 3-4개와 저녁 메뉴 7개를 생성하세요. 점심은 전날 저녁 leftovers이므로 별도 추천하지 않습니다.',
         },
       ],
       response_format: {
@@ -164,29 +179,43 @@ ${recipeDbSummary.map(r =>
           schema: {
             type: 'object',
             properties: {
-              weeklyPlan: {
+              stapleSideDishes: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    recipeId: { type: 'integer' },
+                    reasoning: { type: 'string' },
+                  },
+                  required: ['recipeId', 'reasoning'],
+                  additionalProperties: false,
+                },
+                minItems: 3,
+                maxItems: 4,
+              },
+              dinnerPlans: {
                 type: 'array',
                 items: {
                   type: 'object',
                   properties: {
                     day: { type: 'integer', minimum: 0, maximum: 6 },
-                    mealType: { type: 'string', enum: ['lunch', 'dinner'] },
                     mainRecipeId: { type: 'integer' },
-                    sideRecipeId: { 
-                      type: ['integer', 'null'],
-                      description: '반찬 레시피 ID (없으면 null)'
+                    recommendedSideDishIds: {
+                      type: 'array',
+                      items: { type: 'integer' },
+                      minItems: 1,
+                      maxItems: 2,
                     },
                     reasoning: { type: 'string' },
                   },
-                  required: ['day', 'mealType', 'mainRecipeId', 'sideRecipeId', 'reasoning'],
-                  // strict mode에서는 properties의 모든 키가 required에 포함되어야 함
+                  required: ['day', 'mainRecipeId', 'recommendedSideDishIds', 'reasoning'],
                   additionalProperties: false,
                 },
-                minItems: 14,
-                maxItems: 14,
+                minItems: 7,
+                maxItems: 7,
               },
             },
-            required: ['weeklyPlan'],
+            required: ['stapleSideDishes', 'dinnerPlans'],
             additionalProperties: false,
           },
           strict: true,
@@ -216,7 +245,7 @@ ${recipeDbSummary.map(r =>
         : responseContent
     );
     
-    let parsedResponse: { weeklyPlan: WeeklyPlanResponse['weeklyPlan'] };
+    let parsedResponse: WeeklyPlanResponse;
     try {
       parsedResponse = JSON.parse(responseContent);
       console.log('[OpenAI] JSON 파싱 성공');
@@ -226,11 +255,17 @@ ${recipeDbSummary.map(r =>
       throw new Error(`Failed to parse OpenAI response: ${parseError}`);
     }
     
-    console.log('[OpenAI] 파싱된 식사 수:', parsedResponse?.weeklyPlan?.length || 0);
+    console.log('[OpenAI] 파싱된 고정 반찬 수:', parsedResponse?.stapleSideDishes?.length || 0);
+    console.log('[OpenAI] 파싱된 저녁 메뉴 수:', parsedResponse?.dinnerPlans?.length || 0);
     
-    if (!parsedResponse?.weeklyPlan || parsedResponse.weeklyPlan.length !== 14) {
-      console.error('[OpenAI] 식사 수 불일치:', parsedResponse?.weeklyPlan?.length);
-      throw new Error(`Invalid response format from OpenAI: expected 14 meals, got ${parsedResponse?.weeklyPlan?.length || 0}`);
+    if (!parsedResponse?.stapleSideDishes || parsedResponse.stapleSideDishes.length < 3) {
+      console.error('[OpenAI] 고정 반찬 수 부족:', parsedResponse?.stapleSideDishes?.length);
+      throw new Error(`Invalid response format from OpenAI: expected 3-4 staple side dishes, got ${parsedResponse?.stapleSideDishes?.length || 0}`);
+    }
+    
+    if (!parsedResponse?.dinnerPlans || parsedResponse.dinnerPlans.length !== 7) {
+      console.error('[OpenAI] 저녁 메뉴 수 불일치:', parsedResponse?.dinnerPlans?.length);
+      throw new Error(`Invalid response format from OpenAI: expected 7 dinner plans, got ${parsedResponse?.dinnerPlans?.length || 0}`);
     }
 
     // Zod 스키마로 검증
@@ -238,91 +273,137 @@ ${recipeDbSummary.map(r =>
     const validated = WeeklyPlanSchema.parse(parsedResponse);
     console.log('[OpenAI] Zod 스키마 검증 완료');
 
-    // 7. MealSet[] 구조로 변환 (레시피 DB의 정확한 형식 준수)
-    console.log('[OpenAI] MealSet 변환 시작...');
-    const mealSets: MealSet[] = Array(14).fill(null).map(() => ({ main: null, side: null }));
+    // 7. WeeklyPlan 구조로 변환
+    console.log('[OpenAI] WeeklyPlan 변환 시작...');
     const missingRecipeIds: number[] = [];
 
-    for (const item of validated.weeklyPlan) {
-      const slotIndex = item.day * 2 + (item.mealType === 'lunch' ? 0 : 1);
-      
-      // 메인 레시피 찾기 (ID로 정확히 매칭)
-      const mainRecipe = SEED_RECIPES.find(r => r.id === item.mainRecipeId);
-      if (mainRecipe) {
-        // 원본 레시피 데이터를 그대로 사용 (메뉴명, 재료명 등 정확히 유지)
-        mealSets[slotIndex].main = {
-          ...mainRecipe,
+    // 고정 반찬 변환
+    const stapleSideDishes: Recipe[] = [];
+    for (const item of validated.stapleSideDishes) {
+      const recipe = SEED_RECIPES.find(r => r.id === item.recipeId);
+      if (recipe) {
+        stapleSideDishes.push({
+          ...recipe,
           reason: item.reasoning,
-        };
-        console.log(`[OpenAI] 슬롯${slotIndex} 메인: ${mainRecipe.name} (ID: ${item.mainRecipeId})`);
+        });
+        console.log(`[OpenAI] 고정 반찬: ${recipe.name} (ID: ${item.recipeId})`);
       } else {
-        console.warn(`[OpenAI] 메인 레시피 ID ${item.mainRecipeId}를 찾을 수 없습니다.`);
-        missingRecipeIds.push(item.mainRecipeId);
+        console.warn(`[OpenAI] 반찬 레시피 ID ${item.recipeId}를 찾을 수 없습니다.`);
+        missingRecipeIds.push(item.recipeId);
+      }
+    }
+
+    // 일자별 계획 변환
+    const dailyPlans: DailyPlan[] = [];
+    for (const dinnerPlan of validated.dinnerPlans) {
+      const mainRecipe = SEED_RECIPES.find(r => r.id === dinnerPlan.mainRecipeId);
+      if (!mainRecipe) {
+        console.warn(`[OpenAI] 메인 레시피 ID ${dinnerPlan.mainRecipeId}를 찾을 수 없습니다.`);
+        missingRecipeIds.push(dinnerPlan.mainRecipeId);
+        continue;
       }
 
-      // 반찬 레시피 찾기 (ID로 정확히 매칭)
-      if (item.sideRecipeId !== null) {
-        const sideRecipe = SEED_RECIPES.find(r => r.id === item.sideRecipeId);
-        if (sideRecipe) {
-          // 원본 레시피 데이터를 그대로 사용
-          mealSets[slotIndex].side = {
-            ...sideRecipe,
-            reason: item.reasoning,
-          };
-          console.log(`[OpenAI] 슬롯${slotIndex} 반찬: ${sideRecipe.name} (ID: ${item.sideRecipeId})`);
-        } else {
-          console.warn(`[OpenAI] 반찬 레시피 ID ${item.sideRecipeId}를 찾을 수 없습니다.`);
-          missingRecipeIds.push(item.sideRecipeId);
-        }
-      } else {
-        console.log(`[OpenAI] 슬롯${slotIndex} 반찬: null (반찬 없음)`);
-      }
+      // 추천 반찬 찾기
+      const recommendedSides = dinnerPlan.recommendedSideDishIds
+        .map(id => stapleSideDishes.find(s => s.id === id))
+        .filter((r): r is Recipe => r !== undefined);
+
+      // 점심: 전날 저녁 leftovers (첫날 제외)
+      const lunchType = dinnerPlan.day === 0 ? 'COOK' : 'LEFTOVER';
+      const previousDayDinner = dinnerPlan.day > 0 
+        ? validated.dinnerPlans.find(p => p.day === dinnerPlan.day - 1)
+        : null;
+
+      dailyPlans.push({
+        day: dinnerPlan.day,
+        lunch: {
+          type: lunchType,
+          targetRecipeId: lunchType === 'LEFTOVER' && previousDayDinner 
+            ? previousDayDinner.mainRecipeId 
+            : undefined,
+          recipe: lunchType === 'COOK' ? undefined : undefined, // 간편식은 나중에 처리
+        },
+        dinner: {
+          mainRecipe: {
+            ...mainRecipe,
+            reason: dinnerPlan.reasoning,
+          },
+          recommendedSideDishIds: recommendedSides.map(s => s.id),
+        },
+      });
+
+      console.log(`[OpenAI] Day ${dinnerPlan.day} 저녁: ${mainRecipe.name} (ID: ${dinnerPlan.mainRecipeId})`);
     }
     
     if (missingRecipeIds.length > 0) {
       console.warn('[OpenAI] 찾을 수 없는 레시피 ID:', missingRecipeIds);
     }
 
-    // 8. 누락된 슬롯 채우기 (폴백)
+    // 8. 누락된 항목 채우기 (폴백)
     const usedRecipeIds = new Set<number>();
-    mealSets.forEach(ms => {
-      if (ms.main) usedRecipeIds.add(ms.main.id);
-      if (ms.side) usedRecipeIds.add(ms.side.id);
+    stapleSideDishes.forEach(r => usedRecipeIds.add(r.id));
+    dailyPlans.forEach(dp => {
+      if (dp.dinner.mainRecipe) usedRecipeIds.add(dp.dinner.mainRecipe.id);
     });
 
-    for (let i = 0; i < mealSets.length; i++) {
-      const day = Math.floor(i / 2);
-      const mealType = i % 2 === 0 ? 'lunch' : 'dinner';
-      
-      // 메인이 없으면 채우기
-      if (!mealSets[i].main) {
+    // 고정 반찬이 3개 미만이면 채우기
+    while (stapleSideDishes.length < 3) {
+      const availableSides = candidateRecipes.filter(
+        r => !usedRecipeIds.has(r.id) && 
+        (r.dishType === 'side' || r.tags.some(t => t.includes('#반찬') || t.includes('#볶음') || t.includes('#무침') || t.includes('#조림')))
+      );
+      if (availableSides.length > 0) {
+        const fallback = availableSides[0];
+        stapleSideDishes.push(fallback);
+        usedRecipeIds.add(fallback.id);
+      } else {
+        break;
+      }
+    }
+
+    // 저녁 메뉴가 없으면 채우기
+    for (let day = 0; day < 7; day++) {
+      const existingPlan = dailyPlans.find(dp => dp.day === day);
+      if (!existingPlan || !existingPlan.dinner.mainRecipe) {
         const availableMains = candidateRecipes.filter(
           r => !usedRecipeIds.has(r.id) && 
-          (r.dishType === 'main' || !r.dishType) &&
-          (r.mealType === mealType || r.mealType === 'both' || !r.mealType)
+          (r.dishType === 'main' || !r.dishType)
         );
         if (availableMains.length > 0) {
           const fallback = availableMains[0];
-          mealSets[i].main = fallback;
-          usedRecipeIds.add(fallback.id);
-        }
-      }
-
-      // 반찬이 없으면 채우기
-      if (!mealSets[i].side) {
-        const availableSides = candidateRecipes.filter(
-          r => !usedRecipeIds.has(r.id) && 
-          (r.dishType === 'side' || (!r.dishType && r.calories < 300))
-        );
-        if (availableSides.length > 0) {
-          const fallback = availableSides[0];
-          mealSets[i].side = fallback;
+          if (!existingPlan) {
+            dailyPlans.push({
+              day,
+              lunch: { type: day === 0 ? 'COOK' : 'LEFTOVER', targetRecipeId: day > 0 ? validated.dinnerPlans.find(p => p.day === day - 1)?.mainRecipeId : undefined },
+              dinner: {
+                mainRecipe: fallback,
+                recommendedSideDishIds: stapleSideDishes.slice(0, 1).map(s => s.id),
+              },
+            });
+          } else {
+            existingPlan.dinner.mainRecipe = fallback;
+            if (existingPlan.dinner.recommendedSideDishIds.length === 0) {
+              existingPlan.dinner.recommendedSideDishIds = stapleSideDishes.slice(0, 1).map(s => s.id);
+            }
+          }
           usedRecipeIds.add(fallback.id);
         }
       }
     }
 
-    return mealSets;
+    // 일자별 계획 정렬 (day 순서대로)
+    dailyPlans.sort((a, b) => a.day - b.day);
+
+    const weeklyPlan: WeeklyPlan = {
+      stapleSideDishes,
+      dailyPlans,
+    };
+
+    console.log('[OpenAI] WeeklyPlan 변환 완료');
+    console.log('[OpenAI] 고정 반찬:', stapleSideDishes.map(s => s.name).join(', '));
+    console.log('[OpenAI] 저녁 메뉴:', dailyPlans.map(dp => `Day ${dp.day}: ${dp.dinner.mainRecipe.name}`).join(', '));
+
+    return weeklyPlan;
 
   } catch (error) {
     console.error('OpenAI Plan Generation Error:', error);

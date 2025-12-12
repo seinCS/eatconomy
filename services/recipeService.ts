@@ -1,6 +1,6 @@
 
 import { SEED_RECIPES, STAPLES, WEEKLY_PLAN_SLOTS } from '../constants';
-import { Recipe, UserPreferences, MealSet } from '../types';
+import { Recipe, UserPreferences, MealSet, WeeklyPlan } from '../types';
 
 /**
  * 레시피에 메타데이터 자동 추가 (dishType, mealType)
@@ -132,31 +132,43 @@ export const getAlternativeRecipes = (
   return candidates.slice(0, 3);
 };
 
-export const generateShoppingList = (plannedRecipes: MealSet[], fridgeInventory: string[]): { name: string, count: number }[] => {
-  const allIngredients: string[] = [];
+export const generateShoppingList = (plannedRecipes: WeeklyPlan | null, fridgeInventory: string[]): { name: string, count: number, category: 'staple' | 'daily' }[] => {
+  if (!plannedRecipes) return [];
   
-  plannedRecipes.forEach(mealSet => {
-    // 메인과 반찬 모두의 재료 수집
-    [mealSet.main, mealSet.side].forEach(r => {
-      if (r) {
-        r.ingredients.forEach(ing => {
-          if (!STAPLES.includes(ing)) {
-            allIngredients.push(ing);
-          }
-        });
+  const allIngredients: { name: string, category: 'staple' | 'daily' }[] = [];
+  
+  // 고정 반찬 재료 (주간 구매)
+  plannedRecipes.stapleSideDishes.forEach(side => {
+    side.ingredients.forEach(ing => {
+      if (!STAPLES.includes(ing)) {
+        allIngredients.push({ name: ing, category: 'staple' });
       }
     });
   });
-
-  const needToBuy: Record<string, number> = {};
   
-  allIngredients.forEach(ing => {
-    if (!fridgeInventory.includes(ing)) {
-        needToBuy[ing] = (needToBuy[ing] || 0) + 1;
+  // 일자별 저녁 메인 재료 (당일 구매)
+  plannedRecipes.dailyPlans.forEach(dailyPlan => {
+    if (dailyPlan.dinner.mainRecipe) {
+      dailyPlan.dinner.mainRecipe.ingredients.forEach(ing => {
+        if (!STAPLES.includes(ing)) {
+          allIngredients.push({ name: ing, category: 'daily' });
+        }
+      });
     }
   });
 
-  return Object.entries(needToBuy).map(([name, count]) => ({ name, count }));
+  const needToBuy: Record<string, { count: number, category: 'staple' | 'daily' }> = {};
+  
+  allIngredients.forEach(({ name, category }) => {
+    if (!fridgeInventory.includes(name)) {
+      if (!needToBuy[name]) {
+        needToBuy[name] = { count: 0, category };
+      }
+      needToBuy[name].count += 1;
+    }
+  });
+
+  return Object.entries(needToBuy).map(([name, { count, category }]) => ({ name, count, category }));
 };
 
 // Centralized Plan Generation (Legacy Random - Kept for fallback)

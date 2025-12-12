@@ -6,10 +6,10 @@ import { Recipe } from '../types';
 
 const ListPage: React.FC = () => {
   const { plannedRecipes, fridge, shoppingListChecks, toggleShoppingItem } = useApp();
-  const [items, setItems] = useState<{name: string, count: number}[]>([]);
+  const [items, setItems] = useState<{name: string, count: number, category: 'staple' | 'daily'}[]>([]);
 
   useEffect(() => {
-    // MealSet[]를 그대로 전달 (generateShoppingList가 MealSet[]를 받도록 업데이트됨)
+    // WeeklyPlan을 전달
     const rawList = generateShoppingList(plannedRecipes, fridge);
     setItems(rawList);
   }, [plannedRecipes, fridge]);
@@ -34,57 +34,128 @@ const ListPage: React.FC = () => {
         </p>
       </header>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-            <span className="font-semibold text-gray-700">구매할 재료 ({items.length})</span>
-            <span className="text-sm text-gray-400">{completedCount} / {items.length} 완료</span>
-        </div>
-        
-        {items.length === 0 ? (
-             <div className="p-10 text-center text-gray-400">
-                살 재료가 없어요! <br/> 냉장고 파먹기 대성공 🎉
+      {/* 주간 구매 (Staples) */}
+      {items.filter(i => i.category === 'staple').length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-4">
+          <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
+            <div>
+              <span className="font-bold text-blue-700 text-sm">일주일 구매 (Staples)</span>
+              <p className="text-xs text-blue-600 mt-0.5">일요일에 사두세요</p>
             </div>
-        ) : (
-            <div className="divide-y divide-gray-100">
-                {items.map((item, idx) => {
-                    const isChecked = !!shoppingListChecks[item.name];
-                    return (
-                        <div 
-                            key={item.name} 
-                            onClick={() => toggleShoppingItem(item.name)}
-                            className={`p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition ${isChecked ? 'bg-gray-50' : ''}`}
-                        >
-                            <div className="flex items-center gap-3">
-                                {isChecked ? (
-                                    <CheckCircle className="text-green-500" size={20} />
-                                ) : (
-                                    <Circle className="text-gray-300" size={20} />
-                                )}
-                                <div>
-                                    <span className={`font-medium ${isChecked ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
-                                        {item.name}
-                                    </span>
-                                    {item.count > 1 && (
-                                        <span className="ml-2 text-[10px] font-bold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">
-                                            x{item.count}
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
+            <span className="text-sm text-blue-600 font-semibold">
+              {items.filter(i => i.category === 'staple').length}개
+            </span>
+          </div>
+          
+          <div className="divide-y divide-gray-100">
+            {items.filter(i => i.category === 'staple').map((item, idx) => {
+              const isChecked = !!shoppingListChecks[item.name];
+              return (
+                <div 
+                  key={`staple-${item.name}`} 
+                  onClick={() => toggleShoppingItem(item.name)}
+                  className={`p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition ${isChecked ? 'bg-gray-50' : ''}`}
+                >
+                  <div className="flex items-center gap-3">
+                    {isChecked ? (
+                      <CheckCircle className="text-green-500" size={20} />
+                    ) : (
+                      <Circle className="text-gray-300" size={20} />
+                    )}
+                    <div>
+                      <span className={`font-medium ${isChecked ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                        {item.name}
+                      </span>
+                      {item.count > 1 && (
+                        <span className="ml-2 text-[10px] font-bold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">
+                          x{item.count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-                            <button 
-                                onClick={(e) => handleBuyClick(e, item.name)}
-                                className="p-2 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-full transition-colors flex items-center"
-                                title="쿠팡에서 최저가 검색"
-                            >
-                                <ShoppingCart size={16} />
-                            </button>
-                        </div>
-                    );
-                })}
+                  <button 
+                    onClick={(e) => handleBuyClick(e, item.name)}
+                    className="p-2 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-full transition-colors flex items-center"
+                    title="쿠팡에서 최저가 검색"
+                  >
+                    <ShoppingCart size={16} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 당일 구매 (Daily) */}
+      {items.filter(i => i.category === 'daily').length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-4 bg-orange-50 border-b border-orange-100 flex justify-between items-center">
+            <div>
+              <span className="font-bold text-orange-700 text-sm">당일 구매 (Daily)</span>
+              <p className="text-xs text-orange-600 mt-0.5">요리 당일 퇴근길에 사세요</p>
             </div>
-        )}
-      </div>
+            <span className="text-sm text-orange-600 font-semibold">
+              {items.filter(i => i.category === 'daily').length}개
+            </span>
+          </div>
+          
+          {items.filter(i => i.category === 'daily').length === 0 ? (
+            <div className="p-10 text-center text-gray-400">
+              당일 구매할 재료가 없어요!
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {items.filter(i => i.category === 'daily').map((item, idx) => {
+                const isChecked = !!shoppingListChecks[item.name];
+                return (
+                  <div 
+                    key={`daily-${item.name}`} 
+                    onClick={() => toggleShoppingItem(item.name)}
+                    className={`p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition ${isChecked ? 'bg-gray-50' : ''}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {isChecked ? (
+                        <CheckCircle className="text-green-500" size={20} />
+                      ) : (
+                        <Circle className="text-gray-300" size={20} />
+                      )}
+                      <div>
+                        <span className={`font-medium ${isChecked ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                          {item.name}
+                        </span>
+                        {item.count > 1 && (
+                          <span className="ml-2 text-[10px] font-bold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">
+                            x{item.count}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={(e) => handleBuyClick(e, item.name)}
+                      className="p-2 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-full transition-colors flex items-center"
+                      title="쿠팡에서 최저가 검색"
+                    >
+                      <ShoppingCart size={16} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 재료가 없는 경우 */}
+      {items.length === 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-10 text-center text-gray-400">
+            살 재료가 없어요! <br/> 냉장고 파먹기 대성공 🎉
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
         <div className="mt-1 bg-blue-100 p-1 rounded-full">

@@ -19,35 +19,57 @@ const HomePage: React.FC = () => {
   const location = useLocation();
   const [todaysMeals, setTodaysMeals] = useState<{
     lunch: Recipe | null;
+    lunchType: 'LEFTOVER' | 'COOK' | 'EAT_OUT';
     lunchSide: Recipe | null;
     dinner: Recipe | null;
-    dinnerSide: Recipe | null;
+    dinnerSides: Recipe[];
   } | null>(null);
   const [mealsFinished, setMealsFinished] = useState<{lunch: boolean, dinner: boolean}>({ lunch: false, dinner: false });
 
   // Check if a plan exists
-  const hasPlan = plannedRecipes.some(ms => ms.main !== null || ms.side !== null);
+  const hasPlan = plannedRecipes !== null;
 
   // Determine Today's Meals
   useEffect(() => {
-    if (hasPlan) {
-      const { lunchIndex, dinnerIndex } = getTodayMealIndices();
+    if (hasPlan && plannedRecipes) {
+      const today = new Date().getDay(); // 0=일요일, 1=월요일, ...
+      const dayIndex = today === 0 ? 6 : today - 1; // 월요일=0, 일요일=6
       
-      const lunchSet = plannedRecipes[lunchIndex];
-      const dinnerSet = plannedRecipes[dinnerIndex];
+      const todayPlan = plannedRecipes.dailyPlans[dayIndex];
+      if (!todayPlan) {
+        setTodaysMeals(null);
+        return;
+      }
 
-      // 메인+반찬 모두 표시
-      const lunch = lunchSet?.main || null;
-      const lunchSide = lunchSet?.side || null;
-      const dinner = dinnerSet?.main || null;
-      const dinnerSide = dinnerSet?.side || null;
+      // 점심: 전날 저녁 leftovers 또는 간편식
+      let lunch: Recipe | null = null;
+      let lunchType: 'LEFTOVER' | 'COOK' | 'EAT_OUT' = todayPlan.lunch.type;
+      
+      if (todayPlan.lunch.type === 'LEFTOVER' && todayPlan.lunch.targetRecipeId) {
+        // 전날 저녁 메인 찾기
+        const prevDayIndex = dayIndex > 0 ? dayIndex - 1 : 6;
+        const prevDayPlan = plannedRecipes.dailyPlans[prevDayIndex];
+        lunch = prevDayPlan?.dinner?.mainRecipe || null;
+      } else if (todayPlan.lunch.type === 'COOK' && todayPlan.lunch.recipe) {
+        lunch = todayPlan.lunch.recipe;
+      }
 
-      if (lunch || dinner || lunchSide || dinnerSide) {
+      // 저녁: 메인 + 고정 반찬 중 추천
+      const dinner = todayPlan.dinner.mainRecipe || null;
+      const dinnerSides = todayPlan.dinner.recommendedSideDishIds
+        .map(id => plannedRecipes.stapleSideDishes.find(s => s.id === id))
+        .filter((r): r is Recipe => r !== undefined);
+
+      // 반찬은 점심에 없음 (점심은 leftovers이므로)
+      const lunchSide = null;
+
+      if (lunch || dinner || dinnerSides.length > 0) {
         setTodaysMeals({ 
-          lunch, 
+          lunch,
+          lunchType,
           lunchSide,
           dinner, 
-          dinnerSide 
+          dinnerSides
         });
       } else {
         setTodaysMeals(null);
@@ -136,7 +158,7 @@ const HomePage: React.FC = () => {
       </header>
 
       {/* Dynamic Content: Today's Meals vs Stats */}
-      {hasPlan && todaysMeals && (todaysMeals.lunch || todaysMeals.dinner || todaysMeals.lunchSide || todaysMeals.dinnerSide) ? (
+      {hasPlan && todaysMeals && (todaysMeals.lunch || todaysMeals.dinner || todaysMeals.dinnerSides.length > 0) ? (
         <section className="bg-white rounded-2xl p-6 shadow-xl border border-orange-100 mb-8 relative overflow-hidden">
              <div className="absolute top-0 left-0 w-full h-1 bg-orange-500"></div>
              <div className="mb-4">
@@ -144,8 +166,8 @@ const HomePage: React.FC = () => {
                     <Utensils size={14} className="mr-1"/> 오늘의 식단
                 </h2>
                 
-                {/* Lunch */}
-                {(todaysMeals.lunch || todaysMeals.lunchSide) && (
+                {/* Lunch (Leftover 강조) */}
+                {todaysMeals.lunch && (
                   <div className={`mb-3 p-3 rounded-xl border-2 transition-all ${
                     mealsFinished.lunch 
                     ? 'bg-green-50 border-green-200' 
@@ -153,6 +175,11 @@ const HomePage: React.FC = () => {
                   }`}>
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-xs font-bold text-gray-500">점심</span>
+                      {todaysMeals.lunchType === 'LEFTOVER' && (
+                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                          Leftover
+                        </span>
+                      )}
                       {mealsFinished.lunch && (
                         <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
                           완료
@@ -160,56 +187,37 @@ const HomePage: React.FC = () => {
                       )}
                     </div>
                     
-                    {/* 메인음식 */}
-                    {todaysMeals.lunch && (
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <p className="text-base font-bold text-gray-900">{todaysMeals.lunch.name}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <Clock size={12} className="text-gray-400" />
-                            <span className="text-xs text-gray-500">{todaysMeals.lunch.time}</span>
-                            {(() => {
-                              const readiness = getRecipeReadiness(todaysMeals.lunch);
-                              if (readiness.ready) {
-                                return <span className="text-xs text-green-600 font-medium">✓ 재료 준비됨</span>;
-                              } else {
-                                return <span className="text-xs text-orange-600 font-medium">⚠ 재료 {readiness.missingCount}개 부족</span>;
-                              }
-                            })()}
-                          </div>
-                        </div>
-                        <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
-                          <img 
-                            src={`/images/recipes/${todaysMeals.lunch.id}.jpg`} 
-                            alt={todaysMeals.lunch.name} 
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.lunch.id}/100/100`;
-                            }}
-                          />
+                    {/* 메인음식 (Leftover 표시) */}
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1">
+                        {todaysMeals.lunchType === 'LEFTOVER' ? (
+                          <p className="text-sm font-semibold text-gray-600">어제 저녁 남은</p>
+                        ) : null}
+                        <p className="text-base font-bold text-gray-900">{todaysMeals.lunch.name}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Clock size={12} className="text-gray-400" />
+                          <span className="text-xs text-gray-500">{todaysMeals.lunch.time}</span>
+                          {(() => {
+                            const readiness = getRecipeReadiness(todaysMeals.lunch);
+                            if (readiness.ready) {
+                              return <span className="text-xs text-green-600 font-medium">✓ 재료 준비됨</span>;
+                            } else {
+                              return <span className="text-xs text-orange-600 font-medium">⚠ 재료 {readiness.missingCount}개 부족</span>;
+                            }
+                          })()}
                         </div>
                       </div>
-                    )}
-                    
-                    {/* 반찬 */}
-                    {todaysMeals.lunchSide && (
-                      <div className="flex items-start justify-between border-t border-gray-200 pt-2 mt-2">
-                        <div className="flex-1">
-                          <span className="text-xs text-gray-400 font-medium mr-2">반찬</span>
-                          <span className="text-sm font-semibold text-gray-700">{todaysMeals.lunchSide.name}</span>
-                        </div>
-                        <div className="w-10 h-10 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
-                          <img 
-                            src={`/images/recipes/${todaysMeals.lunchSide.id}.jpg`} 
-                            alt={todaysMeals.lunchSide.name} 
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.lunchSide.id}/100/100`;
-                            }}
-                          />
-                        </div>
+                      <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
+                        <img 
+                          src={`/images/recipes/${todaysMeals.lunch.id}.jpg`} 
+                          alt={todaysMeals.lunch.name} 
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.lunch.id}/100/100`;
+                          }}
+                        />
                       </div>
-                    )}
+                    </div>
                     
                     <div className="flex gap-2 mt-3">
                       <button 
@@ -232,15 +240,15 @@ const HomePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Dinner */}
-                {(todaysMeals.dinner || todaysMeals.dinnerSide) && (
+                {/* Dinner (메인 + 고정 반찬) */}
+                {(todaysMeals.dinner || todaysMeals.dinnerSides.length > 0) && (
                   <div className={`p-3 rounded-xl border-2 transition-all ${
                     mealsFinished.dinner 
                     ? 'bg-green-50 border-green-200' 
                     : 'bg-gray-50 border-gray-200'
                   }`}>
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xs font-bold text-gray-500">저녁</span>
+                      <span className="text-xs font-bold text-gray-500">저녁 (Cooking)</span>
                       {mealsFinished.dinner && (
                         <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
                           완료
@@ -252,7 +260,7 @@ const HomePage: React.FC = () => {
                     {todaysMeals.dinner && (
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
-                          <p className="text-base font-bold text-gray-900">{todaysMeals.dinner.name}</p>
+                          <p className="text-base font-bold text-gray-900">{todaysMeals.dinner.name} (2인분)</p>
                           <div className="flex items-center gap-2 mt-1">
                             <Clock size={12} className="text-gray-400" />
                             <span className="text-xs text-gray-500">{todaysMeals.dinner.time}</span>
@@ -279,23 +287,27 @@ const HomePage: React.FC = () => {
                       </div>
                     )}
                     
-                    {/* 반찬 */}
-                    {todaysMeals.dinnerSide && (
-                      <div className="flex items-start justify-between border-t border-gray-200 pt-2 mt-2">
-                        <div className="flex-1">
-                          <span className="text-xs text-gray-400 font-medium mr-2">반찬</span>
-                          <span className="text-sm font-semibold text-gray-700">{todaysMeals.dinnerSide.name}</span>
-                        </div>
-                        <div className="w-10 h-10 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
-                          <img 
-                            src={`/images/recipes/${todaysMeals.dinnerSide.id}.jpg`} 
-                            alt={todaysMeals.dinnerSide.name} 
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${todaysMeals.dinnerSide.id}/100/100`;
-                            }}
-                          />
-                        </div>
+                    {/* 추천 반찬 (고정 반찬 중) */}
+                    {todaysMeals.dinnerSides.length > 0 && (
+                      <div className="border-t border-gray-200 pt-2 mt-2 space-y-1.5">
+                        <span className="text-xs text-gray-400 font-medium block mb-1">추천 반찬 (냉장고에서 꺼내기)</span>
+                        {todaysMeals.dinnerSides.map((side) => (
+                          <div key={side.id} className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <span className="text-sm font-semibold text-gray-700">{side.name}</span>
+                            </div>
+                            <div className="w-10 h-10 bg-gray-100 rounded-lg overflow-hidden ml-2 flex-shrink-0">
+                              <img 
+                                src={`/images/recipes/${side.id}.jpg`} 
+                                alt={side.name} 
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${side.id}/100/100`;
+                                }}
+                              />
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                     

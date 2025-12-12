@@ -13,7 +13,7 @@ import ProfilePage from './pages/Profile';
 import AuthCallbackPage from './pages/AuthCallback';
 import OnboardingPage from './pages/Onboarding';
 import ErrorBoundary from './components/ErrorBoundary';
-import { Recipe, UserPreferences, User, MealSet } from './types';
+import { Recipe, UserPreferences, User, MealSet, WeeklyPlan, DailyPlan } from './types';
 import { getAllRecipes } from './services/recipeService';
 // import { generateScoredWeeklyPlan } from './services/recipeService'; // LLM 테스트용 주석처리
 import { authService } from './services/authService';
@@ -39,8 +39,8 @@ interface AppContextType {
   addLikedRecipe: (recipe: Recipe) => void;
   dislikedRecipes: Recipe[];
   addDislikedRecipe: (recipe: Recipe) => void;
-  plannedRecipes: MealSet[];
-  updatePlan: (index: number, mealSet: MealSet) => void;
+  plannedRecipes: WeeklyPlan | null;
+  updatePlan: (day: number, dailyPlan: DailyPlan) => void;
   generatePlan: () => Promise<void>;
   generateAIPlan: () => Promise<void>; // Updated to Scored Generation
   isGeneratingPlan: boolean; // Loading state
@@ -136,7 +136,7 @@ const App: React.FC = () => {
   const [preferences, setPreferences] = useState<UserPreferences | undefined>(undefined);
   const [likedRecipes, setLikedRecipes] = useState<Recipe[]>([]);
   const [dislikedRecipes, setDislikedRecipes] = useState<Recipe[]>([]);
-  const [plannedRecipes, setPlannedRecipes] = useState<MealSet[]>(Array(WEEKLY_PLAN_SLOTS).fill(null).map(() => ({ main: null, side: null })));
+  const [plannedRecipes, setPlannedRecipes] = useState<WeeklyPlan | null>(null);
   const [shoppingListChecks, setShoppingListChecks] = useState<Record<string, boolean>>({});
   const [todayMealFinished, setTodayMealFinished] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
@@ -195,13 +195,9 @@ const App: React.FC = () => {
 
           setPreferences(fullUser?.preferences);
           setFridge(fridgeData);
-          // API에서 받은 Recipe[]를 MealSet[]로 변환 (임시)
-        // TODO: 백엔드 API가 MealSet[]를 반환하도록 업데이트 필요
-        const mealSets: MealSet[] = planData.map(recipe => ({
-          main: recipe,
-          side: null // 반찬은 나중에 별도로 로드하거나 기본값 사용
-        }));
-        setPlannedRecipes(mealSets);
+          // API에서 받은 Recipe[]는 레거시 구조이므로 null로 설정
+          // TODO: 백엔드 API가 WeeklyPlan을 반환하도록 업데이트 필요
+          setPlannedRecipes(null);
           setLikedRecipes(likedData);
           setDislikedRecipes(dislikedData);
           setShoppingListChecks(shoppingData);
@@ -302,16 +298,20 @@ const App: React.FC = () => {
     }
   };
 
-  const updatePlan = async (index: number, mealSet: MealSet) => {
-    if (!user) return;
-    const newPlan = [...plannedRecipes];
-    newPlan[index] = mealSet;
+  const updatePlan = async (day: number, dailyPlan: DailyPlan) => {
+    if (!user || !plannedRecipes) return;
+    const newPlan: WeeklyPlan = {
+      ...plannedRecipes,
+      dailyPlans: plannedRecipes.dailyPlans.map(dp => dp.day === day ? dailyPlan : dp),
+    };
     setPlannedRecipes(newPlan);
     try {
       // API는 아직 Recipe 단일 구조를 지원하므로 메인만 저장 (임시)
-      // TODO: 백엔드 API를 MealSet 구조로 업데이트 필요
-      if (mealSet.main) {
-        await apiService.updatePlanSlot(user.id, index, mealSet.main);
+      // TODO: 백엔드 API를 WeeklyPlan 구조로 업데이트 필요
+      if (dailyPlan.dinner.mainRecipe) {
+        // 레거시 인덱스 계산 (저녁만 저장)
+        const legacyIndex = day * 2 + 1; // 저녁은 홀수 인덱스
+        await apiService.updatePlanSlot(user.id, legacyIndex, dailyPlan.dinner.mainRecipe);
       }
     } catch (error) {
       // Rollback on error
@@ -340,41 +340,32 @@ const App: React.FC = () => {
       console.log('[generatePlan] 좋아요 레시피:', likedRecipes.length, '개');
       console.log('[generatePlan] 싫어요 레시피:', dislikedRecipes.length, '개');
       
-      let mealSets: MealSet[];
+      let weeklyPlan: WeeklyPlan;
       
       if (useLLM) {
         // LLM-based generation only
         const { generateWeeklyPlanWithLLM } = await import('./services/openaiService');
         console.log('[generatePlan] LLM 기반 식단 생성 시작...');
-        mealSets = await generateWeeklyPlanWithLLM(
+        weeklyPlan = await generateWeeklyPlanWithLLM(
           fridge,
           preferences,
           dislikedRecipes,
           likedRecipes
         );
-        console.log('[generatePlan] LLM 기반 식단 생성 완료:', mealSets.length, '개 세트');
-        console.log('[generatePlan] 생성된 식단:', mealSets.map((ms, idx) => 
-          `슬롯${idx}: 메인=${ms.main?.name || 'null'}, 반찬=${ms.side?.name || 'null'}`
-        ));
-        
-        // 스코어링 알고리즘 폴백 주석처리 (LLM 테스트용)
-        // } catch (llmError) {
-        //   console.warn('[generatePlan] LLM generation failed, falling back to scored algorithm:', llmError);
-        //   // Fallback to scored algorithm if LLM fails
-        //   mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
-        // }
+        console.log('[generatePlan] LLM 기반 식단 생성 완료');
+        console.log('[generatePlan] 고정 반찬:', weeklyPlan.stapleSideDishes.map(s => s.name).join(', '));
+        console.log('[generatePlan] 저녁 메뉴:', weeklyPlan.dailyPlans.map(dp => `Day ${dp.day}: ${dp.dinner.mainRecipe.name}`).join(', '));
       } else {
         // 스코어링 알고리즘 직접 사용 (주석처리)
-        // mealSets = generateScoredWeeklyPlan(fridge, preferences, dislikedRecipes, likedRecipes);
         throw new Error('스코어링 알고리즘은 현재 비활성화되어 있습니다. LLM 모드를 사용하세요.');
       }
       
-      setPlannedRecipes(mealSets);
+      setPlannedRecipes(weeklyPlan);
       console.log('[generatePlan] 상태 업데이트 완료');
       
       // API는 아직 Recipe[] 구조를 지원하므로 메인만 변환해서 저장 (임시)
-      // TODO: 백엔드 API를 MealSet[] 구조로 업데이트 필요
-      const mainRecipes = mealSets.map(ms => ms.main);
+      // TODO: 백엔드 API를 WeeklyPlan 구조로 업데이트 필요
+      const mainRecipes = weeklyPlan.dailyPlans.map(dp => dp.dinner.mainRecipe);
       console.log('[generatePlan] 백엔드 저장 시작...');
       await apiService.savePlan(user.id, mainRecipes);
       console.log('[generatePlan] 백엔드 저장 완료');

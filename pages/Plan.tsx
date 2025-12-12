@@ -3,13 +3,15 @@ import { useApp } from '../App';
 import { DAYS } from '../constants';
 import { getSharedIngredients, getAlternativeRecipes, getAllRecipes } from '../services/recipeService';
 import { Clock, Link as LinkIcon, Info, Repeat, CheckCircle, TrendingUp, Flame, Leaf, Check, X, ShoppingCart } from 'lucide-react';
-import { Recipe, MealSet } from '../types';
+import { Recipe, WeeklyPlan, DailyPlan } from '../types';
 import { useNavigate } from 'react-router-dom';
 
 interface SlotData {
-    mealSet: MealSet;
-    index: number;
+    dailyPlan: DailyPlan;
+    day: number;
     isMain: boolean; // 메인인지 반찬인지
+    isSideFromStaple: boolean; // 고정 반찬에서 온 반찬인지
+    sideRecipeId?: number; // 반찬 레시피 ID (고정 반찬 중 하나)
 }
 
 const PlanPage: React.FC = () => {
@@ -23,11 +25,17 @@ const PlanPage: React.FC = () => {
 
   // --- Real-time Dashboard Logic ---
   const dashboardStats = useMemo(() => {
+    if (!plannedRecipes) return { savings: 0, avgCalories: 0, chainCount: 0 };
+    
     // 모든 메인과 반찬을 합쳐서 계산
     const allRecipes: Recipe[] = [];
-    plannedRecipes.forEach(ms => {
-      if (ms.main) allRecipes.push(ms.main);
-      if (ms.side) allRecipes.push(ms.side);
+    
+    // 고정 반찬 추가
+    plannedRecipes.stapleSideDishes.forEach(side => allRecipes.push(side));
+    
+    // 일자별 저녁 메인 추가
+    plannedRecipes.dailyPlans.forEach(dp => {
+      if (dp.dinner.mainRecipe) allRecipes.push(dp.dinner.mainRecipe);
     });
     
     // 1. Estimated Savings: (Meal Count * 15,000) - (Meal Count * 5,000) = Count * 10,000
@@ -38,24 +46,23 @@ const PlanPage: React.FC = () => {
     const avgCalories = Math.round(totalCalories / 7);
 
     // 3. Chain Count (Zero Waste Success) - 다른 날 재료 연결성 확인
+    // 점심은 전날 저녁 leftovers이므로 자동으로 연결됨
     let chainCount = 0;
-    for (let i = 0; i < 7; i++) {
-        const lunchSet = plannedRecipes[i * 2];
-        const dinnerSet = plannedRecipes[i * 2 + 1];
-        const prevDinnerSet = i > 0 ? plannedRecipes[(i - 1) * 2 + 1] : null;
+    for (let i = 1; i < 7; i++) {
+        const todayDinner = plannedRecipes.dailyPlans[i]?.dinner?.mainRecipe;
+        const prevDinner = plannedRecipes.dailyPlans[i - 1]?.dinner?.mainRecipe;
 
-        // Lunch <- Prev Dinner (다른 날 연결 보너스)
-        if (prevDinnerSet?.main && lunchSet?.main && getSharedIngredients(prevDinnerSet.main, lunchSet.main).length > 0) {
+        // 점심은 전날 저녁 leftovers이므로 항상 연결됨
+        if (prevDinner && todayDinner && getSharedIngredients(prevDinner, todayDinner).length > 0) {
             chainCount++;
         }
-        // Dinner <- Lunch (같은 날 내 연결은 카운트하지 않음 - 요구사항 반영)
     }
 
     return { savings, avgCalories, chainCount };
   }, [plannedRecipes]);
 
-  const handleRecipeClick = (mealSet: MealSet, index: number, isMain: boolean) => {
-    setSelectedSlot({ mealSet, index, isMain });
+  const handleRecipeClick = (dailyPlan: DailyPlan, day: number, isMain: boolean, isSideFromStaple: boolean = false, sideRecipeId?: number) => {
+    setSelectedSlot({ dailyPlan, day, isMain, isSideFromStaple, sideRecipeId });
     setIsReplacing(false); // Reset replace view
   };
 
@@ -68,16 +75,23 @@ const PlanPage: React.FC = () => {
   };
 
   // Helper: Get chain cooking info
-  const getChainInfo = (index: number) => {
-    const currentRecipe = selectedSlot!.isMain ? selectedSlot!.mealSet.main : selectedSlot!.mealSet.side;
+  const getChainInfo = (day: number) => {
+    if (!plannedRecipes || !selectedSlot) return { prevChain: [], nextChain: [] };
+    
+    const currentRecipe = selectedSlot.isMain 
+      ? selectedSlot.dailyPlan.dinner.mainRecipe 
+      : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId
+          ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
+          : null);
+    
     if (!currentRecipe) return { prevChain: [], nextChain: [] };
     
-    const prevSet = index > 0 ? plannedRecipes[index - 1] : null;
-    const nextSet = index < plannedRecipes.length - 1 ? plannedRecipes[index + 1] : null;
+    const prevDayPlan = day > 0 ? plannedRecipes.dailyPlans[day - 1] : null;
+    const nextDayPlan = day < 6 ? plannedRecipes.dailyPlans[day + 1] : null;
     
-    // 다른 날과의 연결만 확인 (하루 내 연결은 제외)
-    const prevRecipe = prevSet?.main || null;
-    const nextRecipe = nextSet?.main || null;
+    // 다른 날과의 연결만 확인
+    const prevRecipe = prevDayPlan?.dinner?.mainRecipe || null;
+    const nextRecipe = nextDayPlan?.dinner?.mainRecipe || null;
     
     const prevChain = prevRecipe ? getSharedIngredients(prevRecipe, currentRecipe) : [];
     const nextChain = nextRecipe ? getSharedIngredients(currentRecipe, nextRecipe) : [];
@@ -86,18 +100,21 @@ const PlanPage: React.FC = () => {
   };
 
   const handleStartReplace = () => {
-      if (!selectedSlot) return;
+      if (!selectedSlot || !plannedRecipes) return;
       
-      const index = selectedSlot.index;
-      const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+      const day = selectedSlot.day;
+      const currentRecipe = selectedSlot.isMain 
+        ? selectedSlot.dailyPlan.dinner.mainRecipe 
+        : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId
+            ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
+            : null);
       if (!currentRecipe) return;
       
-      const prevSet = index > 0 ? plannedRecipes[index - 1] : null;
-      const prevRecipe = prevSet?.main || null;
+      const prevDayPlan = day > 0 ? plannedRecipes.dailyPlans[day - 1] : null;
+      const prevRecipe = prevDayPlan?.dinner?.mainRecipe || null;
       
-      const isLunch = index % 2 === 0;
-      const otherSlotSet = isLunch ? plannedRecipes[index + 1] : plannedRecipes[index - 1];
-      const otherSlotRecipe = otherSlotSet?.main || null;
+      // 같은 날 저녁 메인 (반찬 교체 시)
+      const otherSlotRecipe = selectedSlot.isMain ? null : selectedSlot.dailyPlan.dinner.mainRecipe;
 
       const all = getAllRecipes();
       const candidates = getAlternativeRecipes(
@@ -112,18 +129,42 @@ const PlanPage: React.FC = () => {
       setIsReplacing(true);
   };
 
-  const confirmReplacement = (newRecipe: Recipe) => {
-      if (!selectedSlot) return;
-      const mealSet = { ...selectedSlot.mealSet };
+  const confirmReplacement = async (newRecipe: Recipe) => {
+      if (!selectedSlot || !plannedRecipes) return;
+      
+      const day = selectedSlot.day;
+      const dailyPlan = { ...plannedRecipes.dailyPlans[day] };
+      
       if (selectedSlot.isMain) {
-        mealSet.main = newRecipe;
-      } else {
-        mealSet.side = newRecipe;
+        // 메인 교체
+        dailyPlan.dinner.mainRecipe = newRecipe;
+      } else if (selectedSlot.isSideFromStaple) {
+        // 고정 반찬 교체는 별도 처리 필요 (현재는 고정 반찬 교체 불가)
+        // TODO: 고정 반찬 교체 기능 추가 필요
+        console.warn('고정 반찬 교체는 아직 지원되지 않습니다.');
+        return;
       }
-      updatePlan(selectedSlot.index, mealSet);
+      
+      await updatePlan(day, dailyPlan);
       setSelectedSlot(null);
       setIsReplacing(false);
   };
+
+  if (!plannedRecipes) {
+    return (
+      <div className="p-6 pb-24 min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-500 mb-4">식단표가 없습니다.</p>
+          <button
+            onClick={() => navigate('/')}
+            className="px-4 py-2 bg-orange-500 text-white rounded-lg font-bold"
+          >
+            식단 추천받기
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 pb-24 min-h-screen bg-gray-50">
@@ -167,65 +208,108 @@ const PlanPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Timeline View */}
-      <div className="space-y-0">
-        {Array.from({ length: 7 }).map((_, dayIndex) => {
-            const dayName = DAYS[dayIndex];
-            const lunchIndex = dayIndex * 2;
-            const dinnerIndex = dayIndex * 2 + 1;
-            const lunchSet = plannedRecipes[lunchIndex];
-            const dinnerSet = plannedRecipes[dinnerIndex];
+      {/* 주간 반찬존 (상단 고정) */}
+      {plannedRecipes && plannedRecipes.stapleSideDishes.length > 0 && (
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-6">
+          <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center">
+            <Leaf size={14} className="mr-1.5 text-green-600" />
+            이번 주 냉장고 친구들 (고정 반찬)
+          </h3>
+          <div className="grid grid-cols-2 gap-2">
+            {plannedRecipes.stapleSideDishes.map((side) => (
+              <div
+                key={side.id}
+                onClick={() => {
+                  // 첫 번째 날짜의 저녁에 이 반찬이 추천되어 있는지 확인
+                  const firstDayPlan = plannedRecipes!.dailyPlans[0];
+                  const isRecommended = firstDayPlan?.dinner?.recommendedSideDishIds?.includes(side.id);
+                  handleRecipeClick(
+                    firstDayPlan,
+                    0,
+                    false,
+                    true,
+                    side.id
+                  );
+                }}
+                className="p-2 bg-gray-50 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-100 active:scale-98 transition-transform"
+              >
+                <div className="flex items-center gap-2">
+                  <img
+                    src={`/images/recipes/${side.id}.jpg`}
+                    alt={side.name}
+                    className="w-10 h-10 rounded-lg object-cover bg-gray-200"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${side.id}/100/100`;
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-gray-800 truncate">{side.name}</p>
+                    <p className="text-[10px] text-gray-500">일주일 내내</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-            // Chain Logic Check (다른 날 연결만 확인)
-            // 1. Previous Dinner -> Today Lunch
-            const prevDinnerSet = dayIndex > 0 ? plannedRecipes[(dayIndex-1)*2 + 1] : null;
-            const chainToLunch = prevDinnerSet?.main && lunchSet?.main 
-              ? getSharedIngredients(prevDinnerSet.main, lunchSet.main) 
+      {/* Timeline View (저녁 중심) */}
+      {plannedRecipes && (
+        <div className="space-y-0">
+          {plannedRecipes.dailyPlans.map((dailyPlan, dayIndex) => {
+            const dayName = DAYS[dayIndex];
+            const prevDayPlan = dayIndex > 0 ? plannedRecipes.dailyPlans[dayIndex - 1] : null;
+
+            // Chain Logic Check: 점심은 전날 저녁 leftovers이므로 자동 연결
+            const chainToLunch = prevDayPlan?.dinner?.mainRecipe && dailyPlan.lunch.type === 'LEFTOVER'
+              ? getSharedIngredients(prevDayPlan.dinner.mainRecipe, dailyPlan.lunch.targetRecipeId ? plannedRecipes.dailyPlans.find(dp => dp.dinner.mainRecipe.id === dailyPlan.lunch.targetRecipeId)?.dinner.mainRecipe || prevDayPlan.dinner.mainRecipe : prevDayPlan.dinner.mainRecipe)
               : [];
 
-            // 2. Today Lunch -> Today Dinner (하루 내 연결은 표시하지 않음 - 요구사항 반영)
-            // const chainToDinner = lunchSet?.main && dinnerSet?.main 
-            //   ? getSharedIngredients(lunchSet.main, dinnerSet.main) 
-            //   : [];
-
             return (
-                <div key={dayName} className="relative pl-8 border-l-2 border-gray-200 last:border-0 pb-8">
-                    {/* Day Label */}
-                    <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-gray-300 border-2 border-white"></div>
-                    <h3 className="text-sm font-bold text-gray-400 mb-4">{dayName}</h3>
+              <div key={dayName} className="relative pl-8 border-l-2 border-gray-200 last:border-0 pb-8">
+                {/* Day Label */}
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-gray-300 border-2 border-white"></div>
+                <h3 className="text-sm font-bold text-gray-400 mb-4">{dayName}</h3>
 
-                    {/* Lunch Slot */}
-                    <div className="mb-2 relative">
-                         {/* Chain Visualizer (from prev dinner) */}
-                         {chainToLunch.length > 0 && (
-                            <div className="absolute -top-6 left-4 right-0 flex justify-center z-0">
-                                <div className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 flex items-center">
-                                    <LinkIcon size={10} className="mr-1"/>
-                                    {chainToLunch[0]} 연계
-                                </div>
-                            </div>
-                        )}
-                        <MealCard 
-                            type="점심" 
-                            mealSet={lunchSet} 
-                            onClickMain={() => lunchSet?.main && handleRecipeClick(lunchSet, lunchIndex, true)}
-                            onClickSide={() => lunchSet?.side && handleRecipeClick(lunchSet, lunchIndex, false)}
-                        />
+                {/* Lunch Slot (작게 표시, LEFTOVER 강조) */}
+                <div className="mb-3 relative">
+                  {chainToLunch.length > 0 && (
+                    <div className="absolute -top-6 left-4 right-0 flex justify-center z-0">
+                      <div className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full border border-green-200 flex items-center">
+                        <LinkIcon size={10} className="mr-1"/>
+                        {chainToLunch[0]} 연계
+                      </div>
                     </div>
-
-                    {/* Dinner Slot */}
-                    <div className="mt-2">
-                        <MealCard 
-                            type="저녁" 
-                            mealSet={dinnerSet} 
-                            onClickMain={() => dinnerSet?.main && handleRecipeClick(dinnerSet, dinnerIndex, true)}
-                            onClickSide={() => dinnerSet?.side && handleRecipeClick(dinnerSet, dinnerIndex, false)}
-                        />
-                    </div>
+                  )}
+                  <LunchCard
+                    dailyPlan={dailyPlan}
+                    prevDayDinner={prevDayPlan?.dinner?.mainRecipe}
+                    onClick={() => {
+                      if (dailyPlan.lunch.type === 'LEFTOVER' && dailyPlan.lunch.targetRecipeId) {
+                        const targetRecipe = prevDayPlan?.dinner?.mainRecipe;
+                        if (targetRecipe) {
+                          // 점심은 전날 저녁 메인을 클릭한 것으로 처리
+                          handleRecipeClick(dailyPlan, dayIndex, true);
+                        }
+                      }
+                    }}
+                  />
                 </div>
+
+                {/* Dinner Slot (강조) */}
+                <div className="mt-2">
+                  <DinnerCard
+                    dailyPlan={dailyPlan}
+                    stapleSideDishes={plannedRecipes.stapleSideDishes}
+                    onClickMain={() => dailyPlan.dinner.mainRecipe && handleRecipeClick(dailyPlan, dayIndex, true)}
+                    onClickSide={(sideId) => handleRecipeClick(dailyPlan, dayIndex, false, true, sideId)}
+                  />
+                </div>
+              </div>
             );
-        })}
-      </div>
+          })}
+        </div>
+      )}
 
       {/* Recipe Detail Modal */}
       {selectedSlot && (
@@ -237,12 +321,22 @@ const PlanPage: React.FC = () => {
                         <div className="flex justify-between items-start mb-4">
                             <div className="flex-1">
                                 <h2 className="text-xl font-bold mb-1">
-                                    {selectedSlot.isMain 
-                                      ? selectedSlot.mealSet.main?.name || '메인 없음'
-                                      : selectedSlot.mealSet.side?.name || '반찬 없음'}
+                                    {(() => {
+                                      if (selectedSlot.isMain) {
+                                        return selectedSlot.dailyPlan.dinner.mainRecipe?.name || '메인 없음';
+                                      } else if (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes) {
+                                        const side = plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId);
+                                        return side?.name || '반찬 없음';
+                                      }
+                                      return '반찬 없음';
+                                    })()}
                                 </h2>
                                 {(() => {
-                                  const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                                  const currentRecipe = selectedSlot.isMain 
+                                    ? selectedSlot.dailyPlan.dinner.mainRecipe 
+                                    : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
+                                        ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
+                                        : null);
                                   if (!currentRecipe) return null;
                                   return (
                                     <div className="flex items-center gap-3 text-xs text-gray-500">
@@ -265,7 +359,11 @@ const PlanPage: React.FC = () => {
 
                         {/* 재료 준비 상태 */}
                         {(() => {
-                            const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                            const currentRecipe = selectedSlot.isMain 
+                              ? selectedSlot.dailyPlan.dinner.mainRecipe 
+                              : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
+                                  ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
+                                  : null);
                             if (!currentRecipe) return null;
                             const readiness = getRecipeReadiness(currentRecipe);
                             return (
@@ -323,7 +421,7 @@ const PlanPage: React.FC = () => {
 
                         {/* 연계 요리 정보 */}
                         {(() => {
-                            const chainInfo = getChainInfo(selectedSlot.index);
+                            const chainInfo = getChainInfo(selectedSlot.day);
                             if (chainInfo.prevChain.length === 0 && chainInfo.nextChain.length === 0) return null;
                             
                             return (
@@ -362,7 +460,11 @@ const PlanPage: React.FC = () => {
 
                         {/* 태그 */}
                         {(() => {
-                          const currentRecipe = selectedSlot.isMain ? selectedSlot.mealSet.main : selectedSlot.mealSet.side;
+                          const currentRecipe = selectedSlot.isMain 
+                            ? selectedSlot.dailyPlan.dinner.mainRecipe 
+                            : (selectedSlot.isSideFromStaple && selectedSlot.sideRecipeId && plannedRecipes
+                                ? plannedRecipes.stapleSideDishes.find(s => s.id === selectedSlot.sideRecipeId) || null
+                                : null);
                           if (!currentRecipe || currentRecipe.tags.length === 0) return null;
                           return (
                             <div className="mb-4">
@@ -452,65 +554,117 @@ const PlanPage: React.FC = () => {
   );
 };
 
-const MealCard: React.FC<{ 
-  type: string, 
-  mealSet: MealSet | null, 
-  onClickMain: () => void,
-  onClickSide: () => void
-}> = ({ type, mealSet, onClickMain, onClickSide }) => {
-    if (!mealSet || (!mealSet.main && !mealSet.side)) {
-        return (
-            <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl text-center text-gray-400 text-sm">
-                {type} 메뉴 없음
-            </div>
-        );
-    }
-
+// 점심 카드 (작게 표시, LEFTOVER 강조)
+const LunchCard: React.FC<{
+  dailyPlan: DailyPlan;
+  prevDayDinner: Recipe | null | undefined;
+  onClick: () => void;
+}> = ({ dailyPlan, prevDayDinner, onClick }) => {
+  if (dailyPlan.lunch.type === 'LEFTOVER' && prevDayDinner) {
     return (
-        <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 space-y-2 relative z-10">
-            {/* 메인음식 */}
-            {mealSet.main && (
-                <div 
-                    onClick={onClickMain} 
-                    className="flex items-center gap-3 active:scale-98 transition-transform cursor-pointer"
-                >
-                    <img 
-                      src={`/images/recipes/${mealSet.main.id}.jpg`} 
-                      alt={mealSet.main.name} 
-                      className="w-12 h-12 rounded-lg object-cover bg-gray-200"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${mealSet.main!.id}/100/100`;
-                      }}
-                    />
-                    <div className="flex-1">
-                        <span className="text-xs text-gray-400 font-medium block">{type} 메인</span>
-                        <span className="font-bold text-gray-800">{mealSet.main.name}</span>
-                    </div>
-                </div>
-            )}
-            
-            {/* 반찬 */}
-            {mealSet.side && (
-                <div 
-                    onClick={onClickSide} 
-                    className="flex items-center gap-3 active:scale-98 transition-transform cursor-pointer border-t border-gray-100 pt-2"
-                >
-                    <img 
-                      src={`/images/recipes/${mealSet.side.id}.jpg`} 
-                      alt={mealSet.side.name} 
-                      className="w-10 h-10 rounded-lg object-cover bg-gray-200"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${mealSet.side!.id}/100/100`;
-                      }}
-                    />
-                    <div className="flex-1">
-                        <span className="text-xs text-gray-400 font-medium block">반찬</span>
-                        <span className="font-semibold text-sm text-gray-700">{mealSet.side.name}</span>
-                    </div>
-                </div>
-            )}
+      <div 
+        onClick={onClick}
+        className="bg-gray-50 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-100 active:scale-98 transition-transform"
+      >
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gray-200 overflow-hidden flex-shrink-0">
+            <img
+              src={`/images/recipes/${prevDayDinner.id}.jpg`}
+              alt={prevDayDinner.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${prevDayDinner.id}/100/100`;
+              }}
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-[10px] text-gray-400 font-medium block">점심 (Leftover)</span>
+            <span className="text-xs font-semibold text-gray-600 truncate">어제 저녁 남은 {prevDayDinner.name}</span>
+          </div>
         </div>
-    )
-}
+      </div>
+    );
+  }
+  
+  return (
+    <div className="p-2 border-2 border-dashed border-gray-200 rounded-lg text-center text-gray-400 text-xs">
+      점심 메뉴 없음
+    </div>
+  );
+};
+
+// 저녁 카드 (강조)
+const DinnerCard: React.FC<{
+  dailyPlan: DailyPlan;
+  stapleSideDishes: Recipe[];
+  onClickMain: () => void;
+  onClickSide: (sideId: number) => void;
+}> = ({ dailyPlan, stapleSideDishes, onClickMain, onClickSide }) => {
+  if (!dailyPlan.dinner.mainRecipe) {
+    return (
+      <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl text-center text-gray-400 text-sm">
+        저녁 메뉴 없음
+      </div>
+    );
+  }
+
+  const recommendedSides = dailyPlan.dinner.recommendedSideDishIds
+    .map(id => stapleSideDishes.find(s => s.id === id))
+    .filter((r): r is Recipe => r !== undefined);
+
+  return (
+    <div className="bg-white p-4 rounded-xl shadow-md border-2 border-orange-100 space-y-3 relative z-10">
+      {/* 저녁 메인 (강조) */}
+      <div className="flex items-center gap-3 mb-2">
+        <div className="absolute -top-2 -left-2 bg-orange-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
+          Cooking
+        </div>
+        <div 
+          onClick={onClickMain} 
+          className="flex items-center gap-3 active:scale-98 transition-transform cursor-pointer flex-1"
+        >
+          <img 
+            src={`/images/recipes/${dailyPlan.dinner.mainRecipe.id}.jpg`} 
+            alt={dailyPlan.dinner.mainRecipe.name} 
+            className="w-14 h-14 rounded-lg object-cover bg-gray-200"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${dailyPlan.dinner.mainRecipe!.id}/100/100`;
+            }}
+          />
+          <div className="flex-1">
+            <span className="text-xs text-orange-600 font-bold block">저녁 메인 (2인분)</span>
+            <span className="font-bold text-gray-900 text-base">{dailyPlan.dinner.mainRecipe.name}</span>
+          </div>
+        </div>
+      </div>
+      
+      {/* 추천 반찬 (고정 반찬 중) */}
+      {recommendedSides.length > 0 && (
+        <div className="border-t border-gray-100 pt-3 space-y-2">
+          <span className="text-[10px] text-gray-400 font-medium block">추천 반찬 (냉장고에서 꺼내기)</span>
+          {recommendedSides.map((side) => (
+            <div 
+              key={side.id}
+              onClick={() => onClickSide(side.id)} 
+              className="flex items-center gap-2 active:scale-98 transition-transform cursor-pointer"
+            >
+              <img 
+                src={`/images/recipes/${side.id}.jpg`} 
+                alt={side.name} 
+                className="w-10 h-10 rounded-lg object-cover bg-gray-200"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${side.id}/100/100`;
+                }}
+              />
+              <div className="flex-1">
+                <span className="font-semibold text-sm text-gray-700">{side.name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default PlanPage;
